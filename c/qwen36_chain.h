@@ -1589,6 +1589,111 @@ static void q36c_dmoe_done(Q36Chain *ch, Model *m, int from, int to, int n, int 
     }
 }
 
+/* ---- a long prompt layer by layer (Q36_VK_LAYERWISE, default on) ------------------------
+ * Chunk by chunk, every chunk of a prompt routed to nearly all of a layer's experts, and
+ * the RAM cache (about 150 a layer on 16 GB) evicted between chunks what the next chunk read
+ * again: a 5.3k-token prompt read 30-67 GB from the SSD and streamed 54 GB to the tier. Here
+ * each layer runs its dense part chunk by chunk on the device (the chunks in order: the
+ * DeltaNet's state and the K/V rows are a chunk's as before), then its routed experts once
+ * over the whole prompt on the host (moe_ex: expert by expert, or the tier in one big step),
+ * then the next layer's frames add them, with the shared expert, before going on. Every row
+ * meets the same operations as chunk by chunk; xh carries the residual between layers. */
+static int q36c_lm_on(void) {
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Q36_VK_LAYERWISE"); v = !(e && *e == '0'); }
+    return v;
+}
+/* rows of one MoE call: the tier's step and the CPU's pass hold their outputs (64 KiB a row) */
+static int q36c_lm_seg(void) {
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Q36_VK_LAYERWISE_ROWS"); v = e && atoi(e) > 0 ? atoi(e) : 2048; }
+    return v;
+}
+static void q36c_lm_angles(Q36Chain *ch, Model *m, int pb, int n) {
+    const Cfg *c = &m->c; int half = c->rotary_dim / 2;
+    float *cs = (float *)vkc_ptr(ch->cs);
+    for (int s = 0; s < n; s++)
+        for (int j = 0; j < half; j++) {
+            float ang = (pb + s) * powf(c->theta, -2.0f * j / c->rotary_dim);
+            cs[(s * half + j) * 2] = cosf(ang); cs[(s * half + j) * 2 + 1] = sinf(ang);
+        }
+}
+/* layer j's routed sum (rt) and shared expert into the residual on the device, from x' (the
+ * residual after its attention or DeltaNet, in ch->x) */
+static int q36c_lm_finish(Q36Chain *ch, Model *m, int j, int n, const float *rt) {
+    Cfg *c = &m->c; int D = c->hidden;
+    memcpy(vkc_ptr(ch->routed), rt, (size_t)n * D * sizeof(float));
+    return q36c_norm(ch->x, 0, ch->prm, ch->o_post[j], ch->h2, 0, n, D, c->eps) &&
+           q36c_shared(ch, m, &m->L[j], j, n) && q36c_combine(ch, m, j, n, ch->routed);
+}
+/* 1 done, 0 declined (nothing ran), -1 lost, 2 stopped between two layers */
+static int q36c_forward_lm(Model *m, Q36Chain *ch, float *xh, int S, int pos_base, int nlogits, float *logit, int rows) {
+    Cfg *c = &m->c; int D = c->hidden, E = c->n_experts, lo = ch->lo, hi = lo + ch->n, half = c->rotary_dim / 2;
+    float *h2a = malloc((size_t)S * D * sizeof(float)), *rt = malloc((size_t)S * D * sizeof(float));
+    float *lga = malloc((size_t)S * E * sizeof(float));
+    if (!h2a || !rt || !lga || !q36c_res(&ch->xd, (size_t)rows * D, VKC_DOWN)) { free(h2a); free(rt); free(lga); return 0; }
+    static int said;
+    if (!said) { said = 1; fprintf(stderr, "[VK] qwen36 chain: a long prompt layer by layer, its experts once a layer over up to %d rows (Q36_VK_LAYERWISE=0: chunk by chunk)\n", q36c_lm_seg()); }
+    int r = 1;
+    for (int i = lo; i <= hi && r == 1; i++) {   /* i == hi: the last layer's experts added, and the head */
+        if (i > lo && i < hi && q36_chunk_control()) { r = 2; break; }
+        Layer *l = i < hi ? &m->L[i] : NULL;
+        for (int c0 = 0; c0 < S; c0 += rows) {
+            int n = S - c0 < rows ? S - c0 : rows, pb = pos_base + c0;
+            int ok = vkc_begin() && vkc_write(ch->x, 0, xh + (size_t)c0 * D, (size_t)n * D * sizeof(float));
+            if (ok && i == lo && c0 == 0) ok = q36c_push_state(ch, m, pos_base, S);
+            if (ok && i > lo) ok = q36c_lm_finish(ch, m, i - 1, n, rt + (size_t)c0 * D);
+            if (ok && l) {
+                if (half && c->is_attn[i]) q36c_lm_angles(ch, m, pb, n);
+                VkcEw add = {VKC_EW_ADD, n * D, D, 1, 0, 1, 0, 0, 0, 0, 0, 1.f};
+                ok = q36c_norm(ch->x, 0, ch->prm, ch->o_in[i], ch->nrm, 0, n, D, c->eps) &&
+                     (c->is_attn[i] ? q36c_attention(ch, m, l, i, n, pb) : q36c_deltanet(ch, m, l, i, n, c0, 0)) &&
+                     vkc_ew(ch->x, ch->x, ch->tmp, NULL, NULL, &add) &&
+                     q36c_norm(ch->x, 0, ch->prm, ch->o_post[i], ch->h2, 0, n, D, c->eps) &&
+                     vkc_matmul(vk_qw_tensor(&l->gate), ch->h2, 0, ch->lg, 0, n) &&
+                     vkc_copy(ch->lgd, 0, ch->lg, 0, (size_t)n * E) && vkc_copy(ch->h2d, 0, ch->h2, 0, (size_t)n * D);
+            }
+            /* after the last layer, the head on this chunk's share of the last nlogits rows */
+            int lo0 = S - nlogits > c0 ? S - nlogits - c0 : 0, lo_n = nlogits ? n - lo0 : 0;
+            if (ok && !l && lo_n > 0) {
+                int dst = c0 + lo0 - (S - nlogits);
+                ok = q36c_norm(ch->x, (size_t)lo0 * D, ch->prm, ch->o_final, ch->fin, (size_t)dst * D, lo_n, D, c->eps) &&
+                     vkc_matmul(vk_qw_tensor(&m->lm_head), ch->fin, (size_t)dst * D, ch->outd, (size_t)dst * c->vocab, lo_n);
+            }
+            ok = ok && vkc_copy(ch->xd, 0, ch->x, 0, (size_t)n * D);
+            double t0 = tm_now();
+            ok = ok && vkc_submit(1);
+            ch->frames++; ch->wait_ms += tm_now() - t0;
+            if (!ok) { r = -1; break; }
+            memcpy(xh + (size_t)c0 * D, vkc_ptr(ch->xd), (size_t)n * D * sizeof(float));
+            if (!l) continue;
+            memcpy(h2a + (size_t)c0 * D, vkc_ptr(ch->h2d), (size_t)n * D * sizeof(float));
+            memcpy(lga + (size_t)c0 * E, vkc_ptr(ch->lgd), (size_t)n * E * sizeof(float));
+            q36c_kv_down(ch, m, i, n, pb);
+            if (c->is_attn[i]) ch->kv_valid[i] = pb + n;
+        }
+        if (r != 1 || !l) break;
+        double t1 = tm_now();
+        for (int s0 = 0; s0 < S; s0 += q36c_lm_seg()) {
+            int sn = S - s0 < q36c_lm_seg() ? S - s0 : q36c_lm_seg();
+            moe_ex(m, l, i, h2a + (size_t)s0 * D, sn, rt + (size_t)s0 * D, lga + (size_t)s0 * E, 1);
+        }
+        double t2 = tm_now();
+        tm_add(S, 2, t2 - t1); ch->host_ms += t2 - t1;
+    }
+    free(h2a); free(rt); free(lga);
+    q36_pf_trim();
+    if (r == 2) {   /* the rows past pos_base were this prompt's: the caller drops them */
+        for (int i = lo; i < hi; i++) if (ch->kv_valid[i] > pos_base) ch->kv_valid[i] = pos_base;
+        ch->snap_valid = 0;
+        return 2;
+    }
+    if (r < 0) return -1;
+    ch->dn_where = Q36C_DEV; ch->host_zero = 0; ch->snap_valid = 0;
+    if (nlogits) memcpy(logit, vkc_ptr(ch->outd), (size_t)nlogits * c->vocab * sizeof(float));
+    return 1;
+}
+
 /* Every layer for S rows from host rows xh, the last row's logits into `logit`; xh gets
  * the final rows back when want_x. 0 = not taken (nothing on the device changed).
  * Otherwise the layers it ran: with a partial chain (N layers, or the head on the CPU)
@@ -1647,6 +1752,20 @@ static int q36c_forward_seg(Model *m, Q36Chain *ch, float *xh, int S, int pos_ba
      * shares each weight's load between up to four rows, not a prompt's tiles */
     vkc_gemm_rows(g_q36_rowwise || ch->mx_rows ? 0 : -1);
     int snapped = 0, dmoe = q36c_dmoe(ch, m, rows);
+    if (S > rows && q36c_lm_on() && !ch->mx_rows && !lf && !part && m->snap_rows <= 0 && !ch->ks.on && !c->lfm3 &&
+        !c->muse && !m->mpos && !m->rope_delta && E > 0 && !g_q36_rowwise) {
+        int lm_ok = 1;
+        for (int i = lo; i < hi && lm_ok; i++) lm_ok = !q36_dense_l(c, i) && !(dmoe && vkc_dmoe_on(&ch->dm, i));
+        int r = lm_ok ? q36c_forward_lm(m, ch, xh, S, pos_base, nlogits, logit, rows) : 0;
+        if (r < 0) goto lost;
+        if (r == 2) { vkc_gemm_rows(-1); return 0; }
+        if (r == 1) {
+            vkc_gemm_rows(-1);
+            ch->forwards++;
+            if (dmoe) vkc_dmoe_forward_done(&ch->dm, S, tm_now() - t_fwd);
+            return L;
+        }
+    }
     for (int c0 = 0; c0 < S; c0 += rows) {
         int n = S - c0 < rows ? S - c0 : rows, pb = pos_base + c0;
         if (c0 > 0 && q36_chunk_control()) {   /* a STOP or CANCEL between two prompt chunks */

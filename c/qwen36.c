@@ -5874,13 +5874,17 @@ static int q36_pf_rows(void) {
 #define Q36_PF_CALL 2048   /* (row, expert) pairs a kernel call */
 #define Q36_PF_GMAX 128
 /* kept between calls: a fresh 100 MB block costs its page faults again every layer */
+static _Thread_local void *g_pf_p[5]; static _Thread_local size_t g_pf_have[5];
 static void *q36_pf_buf(int which, size_t bytes) {
-    static _Thread_local void *p[3]; static _Thread_local size_t have[3];
-    if (have[which] < bytes) {
-        free(p[which]); p[which] = malloc(bytes); have[which] = p[which] ? bytes : 0;
-        if (!p[which]) { fprintf(stderr, "OOM moe_xf_prefill\n"); exit(1); }
+    if (g_pf_have[which] < bytes) {
+        free(g_pf_p[which]); g_pf_p[which] = malloc(bytes); g_pf_have[which] = g_pf_p[which] ? bytes : 0;
+        if (!g_pf_p[which]) { fprintf(stderr, "OOM moe_xf_prefill\n"); exit(1); }
     }
-    return p[which];
+    return g_pf_p[which];
+}
+/* after a long prompt: the big ones back to the system, for the decode's cache */
+static void q36_pf_trim(void) {
+    for (int i = 0; i < 5; i++) if (g_pf_have[i] > ((size_t)64 << 20)) { free(g_pf_p[i]); g_pf_p[i] = NULL; g_pf_have[i] = 0; }
 }
 static void q36_pf_flush(float *ctb, int *off, const float *xg, int nc, const int *cp, const int *cidx,
                          const XfExpert **cexp, int *pos, int D, int F, int mode, void *scratch) {
@@ -6416,7 +6420,7 @@ static void moe_vk_run(Model *m, Layer *l, int layer, const float *x, int S, flo
                        const int *idx, const float *val, int routed_only) {
     Cfg *c = &m->c; int D = q36_eh(c), K = c->topk, I = c->inter, SI = routed_only ? 0 : c->shared_inter;
     int xf = xf_mode(m), B = vkt_step_rows(S, QWEN_VK_ROWS);   /* a whole prompt chunk when the tier streams */
-    float *ctb = falloc((int64_t)B * K * D), *shb = SI > 0 ? falloc((int64_t)B * D) : NULL;
+    float *ctb = q36_pf_buf(3, sizeof(float) * (size_t)B * K * D), *shb = SI > 0 ? q36_pf_buf(4, sizeof(float) * (size_t)B * D) : NULL;
     float *g = falloc(I > SI ? I : SI), *u = falloc(I > SI ? I : SI), *hh = falloc(D);
     uint8_t *taken = malloc((size_t)B * K), *want = malloc((size_t)B * K);
     const float **dev = malloc(sizeof(*dev) * (size_t)B * K);
@@ -6467,7 +6471,7 @@ static void moe_vk_run(Model *m, Layer *l, int layer, const float *x, int S, flo
             if (shb) { const float *sp = shb + (int64_t)s * D; for (int d = 0; d < D; d++) os[d] += sp[d]; }
         }
     }
-    free(ctb); free(shb); free(g); free(u); free(hh); free(taken); free(want); free(dev);
+    free(g); free(u); free(hh); free(taken); free(want); free(dev);
 }
 
 /* GGUF mode: the routed experts of S tokens, one expert at a time. Each expert

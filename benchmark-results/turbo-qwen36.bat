@@ -148,13 +148,15 @@ call :mklong
 set "PROMPT=%HERE%prompt.txt"
 set "LONG=%HERE%prompt-long.txt"
 call :one vk                 
-rem the tier for prompt chunks only (64+ rows), its cold experts streamed; decode on the CPU path
-call :one vk-tierpf          "COLI_VK_TIER=1" "Q36_VK_TIER_MIN_ROWS=64" "COLI_VK_TIER_EXCLUSIVE=0"
-call :one vk-ram88           "Q36_RAM_FRAC=0.88"
+call :one vk-cpu             "COLI_VK_TIER=0"
+rem a long prompt layer by layer (round 11), the tier taking its experts
 call :one long-vk            "PROMPT=%LONG%" "N_NEW=48"
-call :one long-vk-tierpf     "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_TIER=1" "Q36_VK_TIER_MIN_ROWS=64" "COLI_VK_TIER_EXCLUSIVE=0"
-rem the whole tier, decode too (sweep-2's 537 s TTFT was with the RAM leak)
-call :one long-vk-tier       "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_TIER=1"
+call :one long-vk-seg4096    "PROMPT=%LONG%" "N_NEW=48" "Q36_VK_LAYERWISE_ROWS=4096" "Q36_PF_ROWS=4096"
+rem layer by layer, every expert on the CPU (its text must match long-vk-cpu-chunks)
+call :one long-vk-cpu        "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_TIER=0"
+rem chunk by chunk, as before round 11
+call :one long-vk-chunks     "PROMPT=%LONG%" "N_NEW=48" "Q36_VK_LAYERWISE=0"
+call :one long-vk-cpu-chunks "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_TIER=0" "Q36_VK_LAYERWISE=0"
 echo.
 echo ===== %SWEEP%\summary.txt =====
 type "%SWEEP%\summary.txt"
@@ -174,7 +176,7 @@ echo [%NAME%] running ...
 "%COLI_ENGINE%" 0 4 "%PROMPT%" > "%SWEEP%\%NAME%.log" 2>&1
 set "RC=%ERRORLEVEL%"
 >> "%SWEEP%\summary.txt" echo ---- %NAME% (exit %RC%)
-findstr /c:"Speed:" /c:"TTFT" /c:"prompt tokens" /c:"prefill:" /c:"hit rate" /c:"expert kernel" /c:"lm_head" /c:"step() total" /c:"cache auto-sized" /c:"expert cache" /c:"on the CPU (" /c:"tier qwen36" /c:"cannot open" /c:"Q36_SKIP_MISS:" /c:"Q36_LOOKAHEAD:" /c:"Q36_XPACK:" /c:"Q36_PF_EXPERT:" /c:"chain: prompt chunks" /c:"PEAK RSS" "%SWEEP%\%NAME%.log" >> "%SWEEP%\summary.txt"
+findstr /c:"Speed:" /c:"TTFT" /c:"prompt tokens" /c:"prefill:" /c:"hit rate" /c:"expert kernel" /c:"lm_head" /c:"step() total" /c:"cache auto-sized" /c:"expert cache" /c:"on the CPU (" /c:"tier qwen36" /c:"cannot open" /c:"Q36_SKIP_MISS:" /c:"Q36_LOOKAHEAD:" /c:"Q36_XPACK:" /c:"Q36_PF_EXPERT:" /c:"chain: prompt chunks" /c:"PEAK RSS" /c:"layer by layer" /c:"no scratch" /c:"Text :" "%SWEEP%\%NAME%.log" >> "%SWEEP%\summary.txt"
 rem a failed run: its last lines say why
 if not "%RC%"=="0" powershell -NoProfile -Command "Get-Content -Tail 12 '%SWEEP%\%NAME%.log'" >> "%SWEEP%\summary.txt"
 endlocal
@@ -206,8 +208,11 @@ set "COLI_VULKAN=1"
 set "PILOT=0"
 rem the chain and the lm_head first; the expert tier (shaders from build-turbo.bat vk) takes what is left
 if "%COLI_VK_TIER_RESERVE_GB%"=="" set "COLI_VK_TIER_RESERVE_GB=0.5"
-rem routed experts on the CPU: the tier measured slower here (sweep-2); COLI_VK_TIER=1 tries it
-if "%COLI_VK_TIER%"=="" set "COLI_VK_TIER=0"
+rem routed experts of a prompt on the GPU (the tier, its cold experts streamed: 6x the CPU's
+rem rate in sweep-5), of decode on the CPU (faster there: 14.8 against 11.7 tok/s)
+if "%COLI_VK_TIER%"=="" set "COLI_VK_TIER=1"
+if "%Q36_VK_TIER_MIN_ROWS%"=="" set "Q36_VK_TIER_MIN_ROWS=64"
+if "%COLI_VK_TIER_EXCLUSIVE%"=="" set "COLI_VK_TIER_EXCLUSIVE=0"
 rem its RAM host pool would take RAM from the CPU's expert cache (91-95% hits): off unless measured better
 if "%COLI_VK_TIER_HOST%"=="" set "COLI_VK_TIER_HOST=0"
 if "%COLI_VK_TIER%"=="0" goto :eof
