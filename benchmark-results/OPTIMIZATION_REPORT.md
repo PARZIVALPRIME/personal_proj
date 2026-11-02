@@ -467,3 +467,37 @@ call benchmark-results\turbo-qwen36.bat bench
 `LOSSY=1` is not numerically equivalent: it skips a small fraction of
 low-weight cache-miss experts and uses an int4 LM head. Keep it opt-in until
 the generated code quality is acceptable.
+
+## Round 5: quality-mode reliability check
+
+Two later normal-quality runs were completed with the packed Vulkan
+configuration:
+
+| Log | Mode | Speed | Expert fetch | Expert compute | Cache hits | Exit |
+|---|---|---:|---:|---:|---:|---:|
+| `bench-turbo-16.log` | `LOSSY=0` | **15.03 tok/s** | 11.02 ms/token | 25.15 ms/token | 95.2% | 0 |
+| `bench-turbo-20.log` | `LOSSY=0` | **11.84 tok/s** | 20.19 ms/token | 26.70 ms/token | 89.7% | 0 |
+
+Across the three quality-preserving packed runs (12.49, 15.03, and 11.84
+tok/s), the median is **12.49 tok/s** and the observed range is
+**11.84-15.03 tok/s**. The variation is caused by expert-cache residency and
+SSD read throughput, not a runtime failure. Use the median as the reliable
+planning figure; do not treat 15 tok/s as a guaranteed floor.
+
+The later `bench-turbo-17.log` result reached 16.97 tok/s with `LOSSY=1`;
+that run is retained as a comparison only and is not part of the recommended
+quality configuration.
+
+The launcher now explicitly clears `Q36_SKIP_MISS`, `Q36_SKIP_KEEP`,
+`COLI_DENSE_BITS`, and `COLI_DENSE_INT4` whenever `LOSSY` is unset, `0`, or
+another non-lossy value. This prevents a parent Command Prompt with stale
+lossy variables from silently changing a requested quality run.
+
+Every tested quality run exited successfully. The only repeated warnings are
+the expected missing Vulkan expert shaders; they keep routed experts on the
+CPU but do not invalidate the dense Vulkan path.
+
+The short `bench-turbo-21.log` smoke test also exited successfully after the
+launcher reset change, with stale lossy variables intentionally injected into
+the parent shell. No `Q36_SKIP_MISS` line appeared, confirming that
+`LOSSY=0` selected the quality path.

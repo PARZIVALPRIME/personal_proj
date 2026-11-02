@@ -62,6 +62,8 @@ if "%PILOT%"=="1" (
 ) else (
     set "PILOT=0"
 )
+rem Quality mode must clear lossy variables inherited from the parent shell.
+if not "%LOSSY%"=="1" if not "%LOSSY%"=="2" call :quality
 if "%LOSSY%"=="1" call :lossy1
 if "%LOSSY%"=="2" call :lossy2
 if /i "%GPU%"=="vk" call :gpu_vk
@@ -160,6 +162,13 @@ set "Q36_SKIP_MISS=0.08"
 set "Q36_SKIP_KEEP=4"
 set "COLI_DENSE_BITS=4"
 set "COLI_DENSE_INT4=lmhead,dnproj,dnout"
+goto :eof
+
+:quality
+set "Q36_SKIP_MISS="
+set "Q36_SKIP_KEEP="
+set "COLI_DENSE_BITS="
+set "COLI_DENSE_INT4="
 goto :eof
 
 :gpu_vk
