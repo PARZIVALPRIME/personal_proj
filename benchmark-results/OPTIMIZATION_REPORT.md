@@ -297,3 +297,31 @@ Vulkan SDK and reopen the terminal before running `c\build-turbo.bat vk`.
 The raw turbo logs are `bench-turbo-1.log` through `bench-turbo-3.log` for the
 stable native runs and `bench-turbo-4.log` through `bench-turbo-6.log` for the
 lossy runs.
+
+The subsequent warm native run (`bench-turbo-7.log`) completed normally at
+**4.42 tok/s**, with **2.912 s TTFT**, **87.8% cache hit rate**, **91.09
+ms/token expert fetch**, and **23.15 ms/token expert compute**. It used the
+same stable CPU configuration with gated lookup and the persisted heat cache.
+This is a warm-run result, not a guaranteed cold-start speed.
+
+## Development handoff
+
+The current pushed implementation is ready for development on another
+computer. The model weights are not stored in Git. On the second machine,
+install the required compiler/runtime dependencies, update the paths in
+`c\build-turbo.bat` and `benchmark-results\turbo-qwen36.bat`, then run:
+
+```cmd
+call c\build-turbo.bat
+set N_NEW=128
+call benchmark-results\turbo-qwen36.bat bench
+```
+
+Use the same prompt and output length for comparisons. Keep
+`Q36_IO_THREADS=0` unless the parallel loader is fixed and validated for that
+machine; it currently crashes on this Windows safetensors configuration.
+Test `LOSSY=1` separately because it trades response fidelity for speed.
+The next high-value work is to fix and benchmark parallel expert loading,
+install and test Vulkan, and add an output-quality comparison for lossy mode.
+Do not enable CUDA or Vulkan by default without an end-to-end speedup over the
+native CPU path.
