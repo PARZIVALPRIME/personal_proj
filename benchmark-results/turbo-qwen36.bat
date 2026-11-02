@@ -148,12 +148,11 @@ call :mklong
 set "PROMPT=%HERE%prompt.txt"
 set "LONG=%HERE%prompt-long.txt"
 call :one vk                 
-rem a long prompt layer by layer, the tier's cold experts read 16 at a time (round 12)
+rem layer by layer over up to 8192 rows, each layer's misses read ahead during its dense part (round 13)
 call :one long-vk            "PROMPT=%LONG%" "N_NEW=48"
-rem the tier's reads one at a time, as in sweep-6 (29.4 s)
-call :one long-vk-nobatch    "PROMPT=%LONG%" "N_NEW=48" "Q36_VK_LOAD_BATCH=0"
-call :one long-vk-seg8192    "PROMPT=%LONG%" "N_NEW=48" "Q36_VK_LAYERWISE_ROWS=8192" "Q36_PF_ROWS=8192"
-call :one long-vk-io16       "PROMPT=%LONG%" "N_NEW=48" "Q36_IO_THREADS=16"
+rem no read-ahead: sweep-7's long-vk-seg8192 (21.4 s)
+call :one long-vk-nora       "PROMPT=%LONG%" "N_NEW=48" "Q36_RA=0"
+call :one long-vk-ra256      "PROMPT=%LONG%" "N_NEW=48" "Q36_RA_N=256"
 call :one long-vk-cpu        "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_TIER=0"
 echo.
 echo ===== %SWEEP%\summary.txt =====
@@ -174,7 +173,7 @@ echo [%NAME%] running ...
 "%COLI_ENGINE%" 0 4 "%PROMPT%" > "%SWEEP%\%NAME%.log" 2>&1
 set "RC=%ERRORLEVEL%"
 >> "%SWEEP%\summary.txt" echo ---- %NAME% (exit %RC%)
-findstr /c:"Speed:" /c:"TTFT" /c:"prompt tokens" /c:"prefill:" /c:"hit rate" /c:"expert kernel" /c:"lm_head" /c:"step() total" /c:"cache auto-sized" /c:"expert cache" /c:"on the CPU (" /c:"tier qwen36" /c:"cannot open" /c:"Q36_SKIP_MISS:" /c:"Q36_LOOKAHEAD:" /c:"Q36_XPACK:" /c:"Q36_PF_EXPERT:" /c:"chain: prompt chunks" /c:"PEAK RSS" /c:"layer by layer" /c:"no scratch" /c:"Text :" "%SWEEP%\%NAME%.log" >> "%SWEEP%\summary.txt"
+findstr /c:"Speed:" /c:"TTFT" /c:"prompt tokens" /c:"prefill:" /c:"hit rate" /c:"expert kernel" /c:"lm_head" /c:"step() total" /c:"cache auto-sized" /c:"expert cache" /c:"on the CPU (" /c:"tier qwen36" /c:"cannot open" /c:"Q36_SKIP_MISS:" /c:"Q36_LOOKAHEAD:" /c:"Q36_XPACK:" /c:"Q36_PF_EXPERT:" /c:"chain: prompt chunks" /c:"PEAK RSS" /c:"layer by layer" /c:"no scratch" /c:"Q36_RA:" "%SWEEP%\%NAME%.log" >> "%SWEEP%\summary.txt"
 rem a failed run: its last lines say why
 if not "%RC%"=="0" powershell -NoProfile -Command "Get-Content -Tail 12 '%SWEEP%\%NAME%.log'" >> "%SWEEP%\summary.txt"
 endlocal

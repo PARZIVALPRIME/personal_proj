@@ -1606,7 +1606,7 @@ static int q36c_lm_on(void) {
 /* rows of one MoE call: the tier's step and the CPU's pass hold their outputs (64 KiB a row) */
 static int q36c_lm_seg(void) {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Q36_VK_LAYERWISE_ROWS"); v = e && atoi(e) > 0 ? atoi(e) : 4096; }
+    if (v < 0) { const char *e = getenv("Q36_VK_LAYERWISE_ROWS"); v = e && atoi(e) > 0 ? atoi(e) : 8192; }
     return v;
 }
 static void q36c_lm_angles(Q36Chain *ch, Model *m, int pb, int n) {
@@ -1638,6 +1638,7 @@ static int q36c_forward_lm(Model *m, Q36Chain *ch, float *xh, int S, int pos_bas
     for (int i = lo; i <= hi && r == 1; i++) {   /* i == hi: the last layer's experts added, and the head */
         if (i > lo && i < hi && q36_chunk_control()) { r = 2; break; }
         Layer *l = i < hi ? &m->L[i] : NULL;
+        if (l) q36_ra_layer(m, i);   /* its misses read while the device runs its chunks */
         for (int c0 = 0; c0 < S; c0 += rows) {
             int n = S - c0 < rows ? S - c0 : rows, pb = pos_base + c0;
             int ok = vkc_begin() && vkc_write(ch->x, 0, xh + (size_t)c0 * D, (size_t)n * D * sizeof(float));
@@ -1682,6 +1683,7 @@ static int q36c_forward_lm(Model *m, Q36Chain *ch, float *xh, int S, int pos_bas
         tm_add(S, 2, t2 - t1); ch->host_ms += t2 - t1;
     }
     free(h2a); free(rt); free(lga);
+    q36_ra_end();
     q36_pf_trim();
     if (r == 2) {   /* the rows past pos_base were this prompt's: the caller drops them */
         for (int i = lo; i < hi; i++) if (ch->kv_valid[i] > pos_base) ch->kv_valid[i] = pos_base;
