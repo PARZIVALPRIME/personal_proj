@@ -423,3 +423,47 @@ call benchmark-results\turbo-qwen36.bat xpack
 set N_NEW=128
 call benchmark-results\turbo-qwen36.bat sweep
 ```
+
+## Round 4: packed-store benchmark
+
+The packed expert store was created successfully at
+`D:\colibri-models\qwen36-35b\experts.q36x` (about 18.1 GB). The controlled
+128-token runs below used Vulkan, eight loader threads, `Q36_LOOKAHEAD=1`, and
+the packed store:
+
+| Configuration | Speed | Expert fetch | Expert compute | Cache hits | Result |
+|---|---:|---:|---:|---:|---|
+| Packed Vulkan, normal quality | **12.49 tok/s** | 19.20 ms/token | 25.75 ms/token | 90.8% | Best quality-preserving result |
+| Packed Vulkan, `LOSSY=1` | **12.89 tok/s** | 17.63 ms/token | 27.38 ms/token | 91.6% | Fastest; skipped 338/43,200 misses (0.8%) |
+
+Compared with the earlier normal Vulkan result of 6.09 tok/s, packed Vulkan
+is approximately **2.05x faster**. Compared with the earlier Vulkan
+`LOSSY=1` result of 9.76 tok/s, packed `LOSSY=1` is approximately **32%
+faster**. These are direct-engine results for the same 128-token benchmark;
+short interactive responses can vary with cache warmth.
+
+The dense chain placed all 40 layers on the RTX 3050. Routed experts still ran
+on the host because `qmatmul_gate_up.spv`, `rmsnorm.spv`, and
+`attention_absorb.spv` are unavailable, so the next substantial optimization
+is compiling the Vulkan expert shaders.
+
+Recommended normal-quality run:
+
+```cmd
+cd /d D:\colibri-main\colibri-main
+set GPU=vk
+set LOSSY=0
+set N_NEW=128
+call benchmark-results\turbo-qwen36.bat bench
+```
+
+Optional maximum-speed tradeoff:
+
+```cmd
+set LOSSY=1
+call benchmark-results\turbo-qwen36.bat bench
+```
+
+`LOSSY=1` is not numerically equivalent: it skips a small fraction of
+low-weight cache-miss experts and uses an int4 LM head. Keep it opt-in until
+the generated code quality is acceptable.
