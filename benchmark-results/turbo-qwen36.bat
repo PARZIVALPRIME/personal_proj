@@ -146,15 +146,15 @@ call :mklong
 set "PROMPT=%HERE%prompt.txt"
 set "LONG=%HERE%prompt-long.txt"
 call :one vk                 
-rem the expert tier on (sweep-2: 1.7 tok/s before round 8's fix of its RAM leak)
-call :one vk-tier            "COLI_VK_TIER=1"
-call :one vk-tier-nostream   "COLI_VK_TIER=1" "COLI_VK_TIER_STREAM=0"
 call :one vk-ram92           "Q36_RAM_FRAC=0.92"
 call :one long-vk            "PROMPT=%LONG%" "N_NEW=48"
-rem the prompt's experts in row runs, as before round 7
-call :one long-vk-pf0        "PROMPT=%LONG%" "N_NEW=48" "Q36_PF_EXPERT=0"
-call :one long-vk-tier-nostream "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_TIER=1" "COLI_VK_TIER_STREAM=0"
-call :one vk-lossy1          "Q36_SKIP_MISS=0.06" "COLI_DENSE_BITS=4" "COLI_DENSE_INT4=lmhead"
+rem bigger prompt chunks: each chunk re-reads the ~100 experts a layer the cache lacks
+call :one long-vk-rows2048   "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_CHAIN_ROWS=2048"
+call :one long-vk-rows2048-r25 "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_CHAIN_ROWS=2048" "COLI_VK_TIER_RESERVE_GB=0.25"
+call :one long-vk-rows5376   "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_CHAIN_ROWS=5376" "COLI_VK_TIER_RESERVE_GB=0.25" "Q36_PF_ROWS=5376"
+rem the prompt's misses 16 at a time; its expert GEMMs on all 16 hardware threads
+call :one long-vk-io16       "PROMPT=%LONG%" "N_NEW=48" "Q36_IO_THREADS=16"
+call :one long-vk-omp16      "PROMPT=%LONG%" "N_NEW=48" "OMP_NUM_THREADS=16"
 echo.
 echo ===== %SWEEP%\summary.txt =====
 type "%SWEEP%\summary.txt"

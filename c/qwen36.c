@@ -5865,7 +5865,12 @@ static int q36_pf_expert_on(void) {
     if (v < 0) { const char *e = getenv("Q36_PF_EXPERT"); v = !(e && *e == '0'); }
     return v;
 }
-#define Q36_PF_ROWS 2048   /* rows a pass: their S*K outputs live at once (128 MB on the 35B) */
+/* rows a pass: their S*K outputs live at once, 64 KiB a row on the 35B */
+static int q36_pf_rows(void) {
+    static int v;
+    if (!v) { const char *e = getenv("Q36_PF_ROWS"); int n = e && *e ? atoi(e) : 2048; v = n < 64 ? 64 : n > 8192 ? 8192 : n; }
+    return v;
+}
 #define Q36_PF_CALL 2048   /* (row, expert) pairs a kernel call */
 #define Q36_PF_GMAX 128
 /* kept between calls: a fresh 100 MB block costs its page faults again every layer */
@@ -5892,7 +5897,7 @@ static void moe_xf_prefill(Model *m, int layer, const float *x, int S, float *ou
                            const uint8_t *want, float *pair_out, int note) {
     Cfg *c = &m->c; const int D = q36_eh(c), K = c->topk, F = c->inter, E = c->n_experts;
     int G = room / 2; if (G > Q36_PF_GMAX) G = Q36_PF_GMAX; if (G < 1) G = 1;
-    const int SB = S < Q36_PF_ROWS ? S : Q36_PF_ROWS, mode = xf_run_mode(m);
+    const int SB = S < q36_pf_rows() ? S : q36_pf_rows(), mode = xf_run_mode(m);
     float *ctb = q36_pf_buf(0, sizeof(float) * (size_t)SB * K * D);
     float *xg = q36_pf_buf(1, sizeof(float) * (size_t)Q36_PF_CALL * D);
     void *scratch = q36_pf_buf(2, xf_moe_scratch_bytes(Q36_PF_CALL, 1, D, F));
