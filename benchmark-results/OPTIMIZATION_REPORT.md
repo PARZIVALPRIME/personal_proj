@@ -603,3 +603,32 @@ set N_NEW=128
 call benchmark-results\turbo-qwen36.bat sweep
 call benchmark-results\turbo-qwen36.bat selftest
 ```
+
+## Round 8: sweep-2 regression and fix
+
+The shaders compiled, so the Vulkan expert tier turned on for the first time,
+and everything with it got slower:
+
+| Run | Speed | TTFT | Exit |
+|---|---:|---:|---:|
+| `vk-tier` (32-token prompt) | 1.70 tok/s | 15.2 s | 0 |
+| `vk-notier` | 13.56 tok/s | 1.0 s | 0 |
+| `long-vk-tier` (5,338 tokens) | 0.08 tok/s | 537 s | 0 |
+| `long-vk-notier` (round 7 prefill) | 1.12 tok/s | **39.2 s** (was 81.6) | 0 |
+| `vk-tier-ram88`, `long-vk-rows2560` | - | - | 1 |
+
+Cause: with the xf16 expert layout, every expert the CPU computed while the tier
+was on received a second, unpacked 1.5 MB copy that stayed on the cache slot for
+the rest of the run. Over time that grows to about 10 GB on a 16 GB machine. The
+result was paging (the 44.8 s CPU share for 128 tokens) and probably the two
+exit-1 runs. The prefill fix itself worked: misses fell from 63.5k to 17.9k and
+TTFT halved.
+
+Fix: the unpacked copy is made in one buffer a thread, only for an expert the tier
+will take (`vkt_wants`), and is never attached to the cache slot.
+
+Launcher defaults now match the best measured configuration: `COLI_VK_TIER=0`
+(dense chain and lm_head on the GPU, routed experts on CPU/RAM/SSD), and the
+engine's default RAM fraction (0.92 was not reliably better: 16.09 then 13.56).
+The sweep tries the tier again (`COLI_VK_TIER=1`, with and without prompt
+streaming). A failed run now keeps its last 12 log lines in the summary.
