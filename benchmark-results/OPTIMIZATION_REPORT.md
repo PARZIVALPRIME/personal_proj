@@ -502,7 +502,7 @@ launcher reset change, with stale lossy variables intentionally injected into
 the parent shell. No `Q36_SKIP_MISS` line appeared, confirming that
 `LOSSY=0` selected the quality path.
 
-## Round 6: Vulkan expert shaders, long prompts, API self-test (to run)
+## Round 6: Vulkan expert shaders, long prompts, API self-test
 
 The "missing Vulkan expert shaders" warning came from eight `.spv` files that the
 repo does not ship because they are gitignored build products (`qmatmul_gate_up`,
@@ -526,7 +526,36 @@ Changes:
   server. Exit 0 means every turn was answered.
 - `sweep` adds the tier, no-tier, host-pool, and long-prompt configurations.
 
-Run:
+The completed `sweep-1` results show that the short quality benchmark remains
+fast and reliable with the current host-routed expert path:
+
+| Configuration | Speed | TTFT | Cache hits | Exit |
+|---|---:|---:|---:|---:|
+| `vk-tier` | 15.12 tok/s | 0.975 s | 93.0% | 0 |
+| `vk-notier` | 15.32 tok/s | 0.949 s | 93.4% | 0 |
+| `vk-tier-la2` | 15.30 tok/s | 0.941 s | 93.7% | 0 |
+| `vk-tier-hostpool` | 15.56 tok/s | 0.876 s | 93.8% | 0 |
+| `vk-tier-ram92` | **16.09 tok/s** | 0.822 s | 94.7% | 0 |
+| `vk-tier-omp12` | 14.45 tok/s | 0.884 s | 94.1% | 0 |
+
+The recommended quality configuration for this machine is therefore
+`Q36_RAM_FRAC=0.92`, Vulkan, packed experts, and normal precision. It measured
+16.09 tok/s in this sweep, but the prior quality median remains 12.49 tok/s;
+SSD and cache warmth make the lower median the safer planning number.
+
+The long coding-style prompt contained 5,338 input tokens. It measured
+0.57-0.62 tok/s for 48 generated tokens and 73.7-81.6 seconds TTFT. This is
+expected prompt-prefill cost, not a decode crash; short prompts must not be
+used to predict long-context responsiveness.
+
+All sweep configurations exited with code 0. The logs still report missing
+expert shaders, so this run did **not** validate Vulkan routed-expert
+execution. It validated the existing dense Vulkan chain and host expert path.
+The next build should confirm whether `build-turbo.bat vk` actually creates
+the `.spv` files; the runtime must log an expert batch on the device before
+claiming a shader speedup.
+
+Reproduce the tracked validation:
 
 ```bat
 git pull

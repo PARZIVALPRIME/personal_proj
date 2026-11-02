@@ -1,0 +1,179 @@
+---- vk-tier (exit 0)
+[enc] prompt tokens: 32 | generating 128 new tokens
+[qwen36] expert kernel: planar int4 in RAM (expert_ffn.h), QWEN_EXPERT_KERNEL=0 restores int8 unpack
+[qwen36] cache auto-sized: 116 slots/layer of 256 experts (10.5 GB budget via 88% of available RAM, 1.9 GB resident, 0.31 GB KV reserved for 16384 positions, 2 MB/slot, floor 8)
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/qmatmul_gate_up.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/rmsnorm.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/attention_absorb.spv
+[VK] qwen36 chain: 40 of 40 layers on the device (1.42 GiB), 0 on the CPU (free 3.28 GiB, reserve 512.0 MiB)
+[VK] qwen36: 1.81 GiB of dense host copies now live on the device only: expert cache 116 -> 140 slots a layer
+[VK] tier qwen36: no expert batch on this device (shaders?), the experts stay on the CPU
+[qwen36] Q36_XPACK: experts from D:\colibri-models\qwen36-35b/experts.q36x (unbuffered, one read of 1.77 MB in 4 parts a miss)
+TTFT: 0.975 s (time to first token)
+[timers]   lm_head          0.1 ms      0.00 ms/token
+[timers]   step() total: 73.2 ms/token (outside the phases: 38.3)
+[timers]   expert kernel: fetch 13.68 | compute 20.49 ms/token
+[timers] prefill: 61 tokens  dn=0 attn=0 moe=1614(sh=0 rt=0) head=0 ms
+Expert cache hit rate: 93.0% (hit=40493 miss=3029)
+Speed: 15.12 tok/s (8.5s for 128 tokens)
+---- vk-notier (exit 0)
+[enc] prompt tokens: 32 | generating 128 new tokens
+[qwen36] expert kernel: planar int4 in RAM (expert_ffn.h), QWEN_EXPERT_KERNEL=0 restores int8 unpack
+[qwen36] cache auto-sized: 117 slots/layer of 256 experts (10.5 GB budget via 88% of available RAM, 1.9 GB resident, 0.31 GB KV reserved for 16384 positions, 2 MB/slot, floor 8)
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/qmatmul_gate_up.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/rmsnorm.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/attention_absorb.spv
+[VK] qwen36 chain: 40 of 40 layers on the device (1.42 GiB), 0 on the CPU (free 3.28 GiB, reserve 512.0 MiB)
+[VK] qwen36: 1.81 GiB of dense host copies now live on the device only: expert cache 117 -> 141 slots a layer
+[qwen36] Q36_XPACK: experts from D:\colibri-models\qwen36-35b/experts.q36x (unbuffered, one read of 1.77 MB in 4 parts a miss)
+TTFT: 0.949 s (time to first token)
+[timers]   lm_head          0.1 ms      0.00 ms/token
+[timers]   step() total: 72.4 ms/token (outside the phases: 38.4)
+[timers]   expert kernel: fetch 13.10 | compute 20.02 ms/token
+[timers] prefill: 61 tokens  dn=0 attn=0 moe=1565(sh=0 rt=0) head=0 ms
+Expert cache hit rate: 93.4% (hit=40647 miss=2868)
+Speed: 15.32 tok/s (8.4s for 128 tokens)
+---- vk-tier-la2 (exit 0)
+[enc] prompt tokens: 32 | generating 128 new tokens
+[qwen36] expert kernel: planar int4 in RAM (expert_ffn.h), QWEN_EXPERT_KERNEL=0 restores int8 unpack
+[qwen36] cache auto-sized: 118 slots/layer of 256 experts (10.6 GB budget via 88% of available RAM, 1.9 GB resident, 0.31 GB KV reserved for 16384 positions, 2 MB/slot, floor 8)
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/qmatmul_gate_up.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/rmsnorm.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/attention_absorb.spv
+[VK] qwen36 chain: 40 of 40 layers on the device (1.42 GiB), 0 on the CPU (free 3.28 GiB, reserve 512.0 MiB)
+[VK] qwen36: 1.81 GiB of dense host copies now live on the device only: expert cache 118 -> 142 slots a layer
+[VK] tier qwen36: no expert batch on this device (shaders?), the experts stay on the CPU
+[qwen36] Q36_XPACK: experts from D:\colibri-models\qwen36-35b/experts.q36x (unbuffered, one read of 1.77 MB in 4 parts a miss)
+TTFT: 0.941 s (time to first token)
+[timers]   lm_head          0.1 ms      0.00 ms/token
+[timers]   step() total: 72.6 ms/token (outside the phases: 38.5)
+[timers]   expert kernel: fetch 13.03 | compute 20.26 ms/token
+[timers] prefill: 61 tokens  dn=0 attn=0 moe=1556(sh=0 rt=0) head=0 ms
+Expert cache hit rate: 93.7% (hit=40755 miss=2760)
+Speed: 15.30 tok/s (8.4s for 128 tokens)
+---- vk-tier-hostpool (exit 0)
+[enc] prompt tokens: 32 | generating 128 new tokens
+[qwen36] expert kernel: planar int4 in RAM (expert_ffn.h), QWEN_EXPERT_KERNEL=0 restores int8 unpack
+[qwen36] cache auto-sized: 118 slots/layer of 256 experts (10.6 GB budget via 88% of available RAM, 1.9 GB resident, 0.31 GB KV reserved for 16384 positions, 2 MB/slot, floor 8)
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/qmatmul_gate_up.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/rmsnorm.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/attention_absorb.spv
+[VK] qwen36 chain: 40 of 40 layers on the device (1.42 GiB), 0 on the CPU (free 3.28 GiB, reserve 512.0 MiB)
+[VK] qwen36: 1.81 GiB of dense host copies now live on the device only: expert cache 118 -> 142 slots a layer
+[VK] tier qwen36: no expert batch on this device (shaders?), the experts stay on the CPU
+[qwen36] Q36_XPACK: experts from D:\colibri-models\qwen36-35b/experts.q36x (unbuffered, one read of 1.77 MB in 4 parts a miss)
+TTFT: 0.876 s (time to first token)
+[timers]   lm_head          0.1 ms      0.00 ms/token
+[timers]   step() total: 71.8 ms/token (outside the phases: 38.1)
+[timers]   expert kernel: fetch 12.51 | compute 20.37 ms/token
+[timers] prefill: 61 tokens  dn=0 attn=0 moe=1490(sh=0 rt=0) head=0 ms
+Expert cache hit rate: 93.8% (hit=40826 miss=2689)
+Speed: 15.56 tok/s (8.2s for 128 tokens)
+---- vk-tier-ram92 (exit 0)
+[enc] prompt tokens: 32 | generating 128 new tokens
+[qwen36] expert kernel: planar int4 in RAM (expert_ffn.h), QWEN_EXPERT_KERNEL=0 restores int8 unpack
+[qwen36] cache auto-sized: 124 slots/layer of 256 experts (11.0 GB budget via RAM_GB, 1.9 GB resident, 0.31 GB KV reserved for 16384 positions, 2 MB/slot, floor 8)
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/qmatmul_gate_up.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/rmsnorm.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/attention_absorb.spv
+[VK] qwen36 chain: 40 of 40 layers on the device (1.42 GiB), 0 on the CPU (free 3.28 GiB, reserve 512.0 MiB)
+[VK] qwen36: 1.81 GiB of dense host copies now live on the device only: expert cache 124 -> 148 slots a layer
+[VK] tier qwen36: no expert batch on this device (shaders?), the experts stay on the CPU
+[qwen36] Q36_XPACK: experts from D:\colibri-models\qwen36-35b/experts.q36x (unbuffered, one read of 1.77 MB in 4 parts a miss)
+TTFT: 0.822 s (time to first token)
+[timers]   lm_head          0.1 ms      0.00 ms/token
+[timers]   step() total: 69.7 ms/token (outside the phases: 37.6)
+[timers]   expert kernel: fetch 11.10 | compute 20.28 ms/token
+[timers] prefill: 61 tokens  dn=0 attn=0 moe=1382(sh=0 rt=0) head=0 ms
+Expert cache hit rate: 94.7% (hit=41213 miss=2301)
+Speed: 16.09 tok/s (8.0s for 128 tokens)
+---- vk-tier-omp12 (exit 0)
+[enc] prompt tokens: 32 | generating 128 new tokens
+[qwen36] expert kernel: planar int4 in RAM (expert_ffn.h), QWEN_EXPERT_KERNEL=0 restores int8 unpack
+[qwen36] cache auto-sized: 118 slots/layer of 256 experts (10.6 GB budget via 88% of available RAM, 1.9 GB resident, 0.31 GB KV reserved for 16384 positions, 2 MB/slot, floor 8)
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/qmatmul_gate_up.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/rmsnorm.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/attention_absorb.spv
+[VK] qwen36 chain: 40 of 40 layers on the device (1.42 GiB), 0 on the CPU (free 3.28 GiB, reserve 512.0 MiB)
+[VK] qwen36: 1.81 GiB of dense host copies now live on the device only: expert cache 118 -> 142 slots a layer
+[VK] tier qwen36: no expert batch on this device (shaders?), the experts stay on the CPU
+[qwen36] Q36_XPACK: experts from D:\colibri-models\qwen36-35b/experts.q36x (unbuffered, one read of 1.77 MB in 4 parts a miss)
+TTFT: 0.884 s (time to first token)
+[timers]   lm_head          0.1 ms      0.00 ms/token
+[timers]   step() total: 77.9 ms/token (outside the phases: 40.5)
+[timers]   expert kernel: fetch 13.15 | compute 23.13 ms/token
+[timers] prefill: 61 tokens  dn=0 attn=0 moe=1535(sh=0 rt=0) head=0 ms
+Expert cache hit rate: 94.1% (hit=40963 miss=2552)
+Speed: 14.45 tok/s (8.9s for 128 tokens)
+---- long-vk-tier (exit 0)
+[enc] prompt tokens: 5338 | generating 48 new tokens
+[qwen36] expert kernel: planar int4 in RAM (expert_ffn.h), QWEN_EXPERT_KERNEL=0 restores int8 unpack
+[qwen36] cache auto-sized: 121 slots/layer of 256 experts (10.8 GB budget via 88% of available RAM, 1.9 GB resident, 0.31 GB KV reserved for 16384 positions, 2 MB/slot, floor 8)
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/qmatmul_gate_up.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/rmsnorm.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/attention_absorb.spv
+[VK] qwen36 chain: 40 of 40 layers on the device (1.42 GiB), 0 on the CPU (free 3.28 GiB, reserve 512.0 MiB)
+[VK] qwen36: 1.81 GiB of dense host copies now live on the device only: expert cache 121 -> 145 slots a layer
+[VK] tier qwen36: no expert batch on this device (shaders?), the experts stay on the CPU
+[qwen36] Q36_XPACK: experts from D:\colibri-models\qwen36-35b/experts.q36x (unbuffered, one read of 1.77 MB in 4 parts a miss)
+TTFT: 80.226 s (time to first token)
+[timers]   lm_head          0.0 ms      0.00 ms/token
+[timers]   step() total: 107.2 ms/token (outside the phases: 54.1)
+[timers]   expert kernel: fetch 29.72 | compute 22.38 ms/token
+[timers] prefill: 5353 tokens  dn=0 attn=0 moe=73248(sh=0 rt=66) head=0 ms
+Expert cache hit rate: 75.9% (hit=200194 miss=63531)
+Speed: 0.57 tok/s (83.8s for 48 tokens)
+---- long-vk-notier (exit 0)
+[enc] prompt tokens: 5338 | generating 48 new tokens
+[qwen36] expert kernel: planar int4 in RAM (expert_ffn.h), QWEN_EXPERT_KERNEL=0 restores int8 unpack
+[qwen36] cache auto-sized: 121 slots/layer of 256 experts (10.8 GB budget via 88% of available RAM, 1.9 GB resident, 0.31 GB KV reserved for 16384 positions, 2 MB/slot, floor 8)
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/qmatmul_gate_up.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/rmsnorm.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/attention_absorb.spv
+[VK] qwen36 chain: 40 of 40 layers on the device (1.42 GiB), 0 on the CPU (free 3.28 GiB, reserve 512.0 MiB)
+[VK] qwen36: 1.81 GiB of dense host copies now live on the device only: expert cache 121 -> 145 slots a layer
+[qwen36] Q36_XPACK: experts from D:\colibri-models\qwen36-35b/experts.q36x (unbuffered, one read of 1.77 MB in 4 parts a miss)
+TTFT: 81.619 s (time to first token)
+[timers]   lm_head          0.0 ms      0.00 ms/token
+[timers]   step() total: 90.6 ms/token (outside the phases: 40.1)
+[timers]   expert kernel: fetch 27.69 | compute 21.85 ms/token
+[timers] prefill: 5346 tokens  dn=0 attn=0 moe=74526(sh=0 rt=67) head=0 ms
+Expert cache hit rate: 76.1% (hit=201205 miss=63327)
+Speed: 0.56 tok/s (85.3s for 48 tokens)
+---- long-vk-hostpool (exit 0)
+[enc] prompt tokens: 5338 | generating 48 new tokens
+[qwen36] expert kernel: planar int4 in RAM (expert_ffn.h), QWEN_EXPERT_KERNEL=0 restores int8 unpack
+[qwen36] cache auto-sized: 128 slots/layer of 256 experts (11.3 GB budget via 88% of available RAM, 1.9 GB resident, 0.31 GB KV reserved for 16384 positions, 2 MB/slot, floor 8)
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/qmatmul_gate_up.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/rmsnorm.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/attention_absorb.spv
+[VK] qwen36 chain: 40 of 40 layers on the device (1.42 GiB), 0 on the CPU (free 3.28 GiB, reserve 512.0 MiB)
+[VK] qwen36: 1.81 GiB of dense host copies now live on the device only: expert cache 128 -> 152 slots a layer
+[VK] tier qwen36: no expert batch on this device (shaders?), the experts stay on the CPU
+[qwen36] Q36_XPACK: experts from D:\colibri-models\qwen36-35b/experts.q36x (unbuffered, one read of 1.77 MB in 4 parts a miss)
+TTFT: 73.733 s (time to first token)
+[timers]   lm_head          0.0 ms      0.00 ms/token
+[timers]   step() total: 103.9 ms/token (outside the phases: 53.9)
+[timers]   expert kernel: fetch 27.15 | compute 21.86 ms/token
+[timers] prefill: 5353 tokens  dn=0 attn=0 moe=66901(sh=0 rt=65) head=0 ms
+Expert cache hit rate: 77.5% (hit=188230 miss=54706)
+Speed: 0.62 tok/s (77.2s for 48 tokens)
+---- vk-tier-lossy1 (exit 0)
+[enc] prompt tokens: 32 | generating 128 new tokens
+[qwen36] expert kernel: planar int4 in RAM (expert_ffn.h), QWEN_EXPERT_KERNEL=0 restores int8 unpack
+[qwen36] cache auto-sized: 128 slots/layer of 256 experts (11.1 GB budget via 88% of available RAM, 1.7 GB resident, 0.31 GB KV reserved for 16384 positions, 2 MB/slot, floor 8)
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/qmatmul_gate_up.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/rmsnorm.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/attention_absorb.spv
+[VK] qwen36 chain: 40 of 40 layers on the device (1.42 GiB), 0 on the CPU (free 3.28 GiB, reserve 512.0 MiB)
+[VK] qwen36: 1.60 GiB of dense host copies now live on the device only: expert cache 128 -> 149 slots a layer
+[VK] tier qwen36: no expert batch on this device (shaders?), the experts stay on the CPU
+[qwen36] Q36_XPACK: experts from D:\colibri-models\qwen36-35b/experts.q36x (unbuffered, one read of 1.77 MB in 4 parts a miss)
+TTFT: 1.158 s (time to first token)
+[timers]   lm_head          0.1 ms      0.00 ms/token
+[timers]   step() total: 76.8 ms/token (outside the phases: 43.1)
+[timers]   expert kernel: fetch 12.72 | compute 20.04 ms/token
+[timers]   Q36_SKIP_MISS: 282 of 42560 routed experts skipped (0.7%)
+[timers] prefill: 71 tokens  dn=0 attn=0 moe=1950(sh=0 rt=0) head=0 ms
+Expert cache hit rate: 93.2% (hit=40455 miss=2971)
+Speed: 15.24 tok/s (8.4s for 128 tokens)
