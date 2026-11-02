@@ -1174,6 +1174,7 @@ typedef struct {
  * g4/u4/d4 are then NULL. */
 typedef struct { int eid; int pinned; int is_int4; int8_t *g, *u, *d; uint8_t *g4, *u4, *d4; uint8_t *pw; float *gs, *us, *ds; uint64_t used;
                  unsigned busy; /* callers computing from this slot (expert_hold): never evicted */
+                 uint8_t prot;  /* Q36_EVICT=slru: in the protected segment (hit again since it was loaded) */
                  uint8_t *gqe;  /* GGUF mode: the expert, [gate | up | down] in their held types (GqExp hg/hu/hd) */
                  int8_t *t8; float *t8s; int t8_eid;   /* GGUF mode, the Vulkan tier: gqe as int8 with one scale per 32 weights (gq_slot_i8),
                                                           or as the file's rows when gqe holds them interleaved (vk_slot_src), for expert t8_eid - 1 */ } Slot;
@@ -1191,6 +1192,7 @@ typedef struct {
     Slot *slots;
     int *slot_by_expert;                  /* expert id -> resident slot, -1 if absent */
     int n, cap;
+    int nprot;                            /* Q36_EVICT=slru: slots in the protected segment */
 } LCache;
 
 /* CACHE_ROUTE telemetry (docs/CACHE_ROUTE.md): the lever changes which experts
@@ -1267,6 +1269,7 @@ typedef struct {
     float pilot_smooth, pilot_conf_limit;
     uint8_t *is_pinned;
     uint8_t *is_queued;
+    uint8_t *loading;          /* [layer*E+eid] a thread is reading it now: others wait instead of reading it twice */
     uint8_t *seen;             /* prefill-collected experts (COLIBRI_RESIDENT) */
     int resident_mode;         /* 0 off; 1 pin this-prompt experts (CPU no-evict -> GPU resident) */
     int resident_collecting;   /* prefill in progress, collecting routed experts */
@@ -1344,6 +1347,16 @@ static int q36_ring_holds(const int *ring_pos, int R, int t0, int t1) {
 }
 
 static pthread_mutex_t g_pilot_mx = PTHREAD_MUTEX_INITIALIZER;
+/* Signalled under g_pilot_mx whenever a load publishes (or gives up) an expert, so a
+ * thread that wants an expert someone else is already reading waits for it. */
+static pthread_cond_t g_pub_cv = PTHREAD_COND_INITIALIZER;
+/* The PILOT workers sleep on this instead of polling with Sleep(1), which is a 15.6 ms
+ * tick on a default Windows timer: the prefetch arrived after the layer it was for. */
+static pthread_mutex_t g_pilot_qmx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_pilot_qcv = PTHREAD_COND_INITIALIZER;
+/* A loader thread (PILOT, Q36_IO_THREADS): its expert repack runs serially. An OpenMP
+ * region opened from a foreign thread builds a second spinning team per loader. */
+static _Thread_local int g_q36_io_thread;
 static struct { int l, e; } pilot_q[4096];
 static volatile unsigned pilot_r = 0, pilot_w = 0;
 static Model *pilot_m = NULL;
@@ -1361,6 +1374,7 @@ static int   g_route_agree = 0;
 
 static void pilot_prefetch(Model *m, int lnext, const float *x, int S);
 static void *pilot_worker(void *arg);
+static void q36_pilot_kick(void);
 static void ensure_pilot_worker_started(Model *m);
 static void slot_ensure_allocated(Model *m, Slot *s);
 static int pilot_claim(int *layer, int *eid);
@@ -1440,21 +1454,57 @@ static void slot_release(Slot *s) {
 }
 static int  slot_busy(const Slot *s) { return __atomic_load_n(&s->busy, __ATOMIC_ACQUIRE) != 0; }
 
+/* Q36_EVICT=slru: segmented LRU. A loaded expert enters probation; a second hit moves it
+ * to the protected segment (at most Q36_SLRU_PROT of the slots, 0.8 by default). The
+ * victim is the LRU of probation, then of protected, so experts routed once in a while
+ * cannot flush the ones every few tokens route to. Placement only: outputs unchanged. */
+static int g_q36_slru = -1;
+static float g_q36_slru_frac = 0.8f;
+static int q36_slru_on(void) {
+    if (g_q36_slru < 0) {
+        const char *e = getenv("Q36_EVICT");
+        g_q36_slru = e && !strcmp(e, "slru");
+        const char *f = getenv("Q36_SLRU_PROT");
+        float v = f && *f ? (float)atof(f) : 0.8f;
+        g_q36_slru_frac = v < 0.1f ? 0.1f : v > 0.95f ? 0.95f : v;
+    }
+    return g_q36_slru;
+}
+/* caller holds g_pilot_mx */
+static void q36_slru_promote(LCache *lc, Slot *s) {
+    s->prot = 1; lc->nprot++;
+    int limit = (int)(lc->cap * g_q36_slru_frac);
+    if (limit < 1) limit = 1;
+    while (lc->nprot > limit) {
+        int v = -1;
+        for (int i = 0; i < lc->n; i++) {
+            const Slot *t = &lc->slots[i];
+            if (!t->prot || t == s) continue;
+            if (v < 0 || t->used < lc->slots[v].used) v = i;
+        }
+        if (v < 0) break;
+        lc->slots[v].prot = 0; lc->nprot--;
+    }
+}
+static void q36_slru_drop(LCache *lc, Slot *s) { if (s->prot) { s->prot = 0; lc->nprot--; } }
+
 /* The slot a full layer cache gives up, caller holds g_pilot_mx: the least
  * recently used one that is neither being loaded (eid < 0) nor computed from
  * (busy), unpinned unless allow_pinned. -1 when there is none. The demand
  * path and the PILOT worker both pick here, so neither can evict an expert a
  * moe run is still reading. One whose expert the Vulkan tier holds goes first
- * (vkt_ram_first: RAM and VRAM do not keep the same experts when RAM is short). */
+ * (vkt_ram_first: RAM and VRAM do not keep the same experts when RAM is short).
+ * Under Q36_EVICT=slru a protected slot goes only when probation has none. */
 static int slot_victim(const LCache *lc, int layer, int allow_pinned) {
-    int lru = -1, dev = -1;
+    int lru = -1, dev = -1, prot = -1;
     for (int i = 0; i < lc->n; i++) {
         const Slot *s = &lc->slots[i];
         if (s->eid < 0 || slot_busy(s) || (s->pinned && !allow_pinned)) continue;
         if (vkt_ram_first(layer, s->eid)) { if (dev < 0 || s->used < lc->slots[dev].used) dev = i; continue; }
+        if (s->prot) { if (prot < 0 || s->used < lc->slots[prot].used) prot = i; continue; }
         if (lru < 0 || s->used < lc->slots[lru].used) lru = i;
     }
-    return dev >= 0 ? dev : lru;
+    return dev >= 0 ? dev : lru >= 0 ? lru : prot;
 }
 
 static void ensure_pilot_worker_started(Model *m) {
@@ -1516,6 +1566,7 @@ double g_qt_iss=0, g_qt_cpu=0, g_qt_tak=0;   /* QTIER-Phasen (Decode) */
 double g_dn_sub[4];                           /* DN: proj, conv+split, l2n+rec, norm+out */
 double g_tm_step=0;                           /* step() total (decode) */
 static double g_xf_load=0, g_xf_run=0;        /* expert_ffn path: expert fetch (misses) vs compute, decode */
+static uint64_t g_skip_n, g_skip_tot;          /* Q36_SKIP_MISS: routed experts skipped / seen */
 static double g_tm_win_moe=0; static int g_tm_win_n=0;
 static void tm_add(int S, int idx, double ms){
     if(S==1){
@@ -1548,6 +1599,9 @@ static void tm_report(void){
     if(g_xf_load+g_xf_run>0)
         fprintf(stderr,"[timers]   expert kernel: fetch %.2f | compute %.2f ms/token\n",
                 g_xf_load/g_tm_dec_tokens, g_xf_run/g_tm_dec_tokens);
+    if(g_skip_tot>0)
+        fprintf(stderr,"[timers]   Q36_SKIP_MISS: %llu of %llu routed experts skipped (%.1f%%)\n",
+                (unsigned long long)g_skip_n,(unsigned long long)g_skip_tot,100.0*(double)g_skip_n/(double)g_skip_tot);
     if(g_qt_iss+g_qt_cpu+g_qt_tak>0)
         fprintf(stderr,"[timers]   qtier: issue %.2f | cpu-miss %.2f | take %.2f ms/token\n",
                 g_qt_iss/g_tm_dec_tokens, g_qt_cpu/g_tm_dec_tokens, g_qt_tak/g_tm_dec_tokens);
@@ -3994,6 +4048,20 @@ static int gguf_report_unused(const Cfg *c) {
     return n;
 }
 
+static int64_t scale_count_gu(const Cfg *c);
+static int64_t scale_count_d(const Cfg *c);
+/* One cache slot as slot_ensure_allocated makes it, in the unit of qwen36_cap_for_ram's
+ * slot_gb. That estimate counts a scale per row; a gs64 container keeps one per 64
+ * weights (196 KB a slot on the 35B, 12% more than estimated), so a cache sized on it
+ * alone took more RAM than the budget it was given and a 16 GB host paged. */
+static double q36_slot_real_gb(Model *m) {
+    const Cfg *c = &m->c;
+    if (g_gguf) return (double)m->gqe_max / 1e9;
+    int64_t ng = (int64_t)c->inter * q36_eh(c);
+    double w = xf_mode(m) ? (double)(3 * ng) / 2 : (double)(3 * ng);
+    return (w + (double)(2 * scale_count_gu(c) + scale_count_d(c)) * sizeof(float)) / 1e9;
+}
+
 static void model_init_range(Model *m, const char *snap, int cap, int bits,
                              int layer_begin, int layer_end,
                              int load_boundaries, int allocate_state) {
@@ -4239,6 +4307,12 @@ static void model_init_range(Model *m, const char *snap, int cap, int bits,
         double avail = mem_available_gb();
         const char *ram_env = getenv("RAM_GB");
         double ram_override = ram_env ? atof(ram_env) : 0.0;
+        /* Q36_RAM_FRAC: the share of the available RAM the cache may take (0.88 by default) */
+        const char *rf = getenv("Q36_RAM_FRAC");
+        if (ram_override <= 0.0 && rf && *rf) {
+            double f = atof(rf);
+            if (f > 0.05 && f < 1.0) ram_override = resident + avail * f;
+        }
         int n_active = layer_end - layer_begin;
         double slot_gb = 0.0, budget_gb = 0.0;
         /* The KV the context ceiling will grow into is not resident yet: keep its room
@@ -4251,12 +4325,35 @@ static void model_init_range(Model *m, const char *snap, int cap, int bits,
         cap = qwen36_cap_for_ram(resident, avail, ram_override,
                                   q36_eh(c), c->inter, c->n_experts, n_active,
                                   xf_mode(m), c->topk, kv_reserve, &slot_gb, &budget_gb);
+        {   /* the same room, priced at the slot's real size */
+            double real_gb = q36_slot_real_gb(m), room = budget_gb - resident - kv_reserve;
+            int layers = n_active < 1 ? 1 : n_active;
+            int real_cap = room > 0.0 && real_gb > 0.0 ? (int)(room / real_gb / layers) : 0;
+            if (real_cap < c->topk) real_cap = c->topk;
+            if (real_cap < cap) cap = real_cap;
+            slot_gb = real_gb;
+        }
         fprintf(stderr, "[qwen36] cache auto-sized: %d slots/layer of %d experts "
                         "(%.1f GB budget via %s, %.1f GB resident, %.2f GB KV reserved "
                         "for %d positions, %.0f MB/slot, floor %d)\n",
                 cap, c->n_experts, budget_gb,
                 ram_override > 0.0 ? "RAM_GB" : "88% of available RAM",
                 resident, kv_reserve, qwen36_max_ctx(), slot_gb * 1000.0, c->topk);
+    } else if (c->n_experts > 0 && !(getenv("Q36_CAP_FORCE") && getenv("Q36_CAP_FORCE")[0] == '1')) {
+        /* An explicit cap the RAM cannot hold: the slots are allocated as they fill, and
+         * past the RAM the OS pages the cache out to the drive the experts are read from.
+         * A 16 GB laptop given --cap 256 (18 GB of slots) ran into exactly that. */
+        double avail = mem_available_gb(), real_gb = q36_slot_real_gb(m);
+        int layers = layer_end - layer_begin; if (layers < 1) layers = 1;
+        double room = avail * 0.92 - q36_kv_reserve_gb(c, layer_begin, layer_end, qwen36_max_ctx(), q36_kv_es());
+        int fit = room > 0.0 && real_gb > 0.0 ? (int)(room / real_gb / layers) : 0;
+        if (fit < c->topk) fit = c->topk;
+        if (avail > 0.0 && fit < c->n_experts && cap > fit) {
+            fprintf(stderr, "[qwen36] cache %d slots/layer needs %.1f GB, %.1f GB of RAM is available: "
+                            "clamped to %d (Q36_CAP_FORCE=1 keeps the cap)\n",
+                    cap, cap * real_gb * layers, avail, fit);
+            cap = fit;
+        }
     }
     m->cache = calloc((size_t)c->n_layers, sizeof(LCache));
     for (int i = layer_begin; i < layer_end; i++) {
@@ -4473,7 +4570,7 @@ static void load_expert_merged(Model *m, int layer, int eid, Slot *s) {
                 ng[k] = ht[k] != ft[k] ? rows[k] / 16 : 0;
                 if (!ng[k]) memcpy(dst + ho[k], b + fo[k], (size_t)fb[k]);
             }
-            #pragma omp parallel for schedule(static) if (!omp_in_parallel())
+            #pragma omp parallel for schedule(static) if (!omp_in_parallel() && !g_q36_io_thread)
             for (int j = 0; j < ng[0] + ng[1] + ng[2]; j++) {
                 const int k = j < ng[0] ? 0 : j < ng[0] + ng[1] ? 1 : 2, g = j - (k > 0 ? ng[0] : 0) - (k > 1 ? ng[1] : 0);
                 const int64_t fr = gq_row_bytes(ft[k], cols[k]), hr = gq_row_bytes(ht[k], cols[k]);
@@ -4553,7 +4650,7 @@ static void load_expert_merged(Model *m, int layer, int eid, Slot *s) {
             xf_repack_pairs_signed(pl + 2 * gp, raw + 2 * gp, H, I);
             st_read_f32(&m->S, qsnm, scb, 0);
             const uint8_t *plw = pl; const float *scw = scb; uint8_t *dst = s->pw;
-            #pragma omp parallel for schedule(static) if (!omp_in_parallel())
+            #pragma omp parallel for schedule(static) if (!omp_in_parallel() && !g_q36_io_thread)
             for (int j = 0; j < 2 * ngI + ngH; j++) {
                 if (j < 2 * ngI) {
                     const int k = j / ngI, g = j % ngI;
@@ -4709,15 +4806,22 @@ static void ehit_mark(Model *m, int layer, int eid){
 static void expert_fetch(Model *m, int layer, int eid, Slot **out, int hold) {
     ehit_mark(m, layer, eid);   /* tocca solo m->ehit[layer][eid] */
     LCache *lc = &m->cache[layer];
+    const int64_t gidx = (int64_t)layer * m->c.n_experts + eid;
     pthread_mutex_lock(&g_pilot_mx);
-    Slot *hit = slot_indexed(m, layer, eid);
-    if (hit) {
-        m->hits++; hit->used = ++m->clock; *out = hit;
-        if (hold) slot_hold(hit);
-        pthread_mutex_unlock(&g_pilot_mx); return;
+    for (;;) {
+        Slot *hit = slot_indexed(m, layer, eid);
+        if (hit) {
+            m->hits++; hit->used = ++m->clock; *out = hit;
+            if (q36_slru_on() && !hit->prot) q36_slru_promote(lc, hit);
+            if (hold) slot_hold(hit);
+            pthread_mutex_unlock(&g_pilot_mx); return;
+        }
+        if (!m->loading || !m->loading[gidx]) break;
+        pthread_cond_wait(&g_pub_cv, &g_pilot_mx);   /* another loader is reading this expert */
     }
     m->miss++;
     Cfg *c = &m->c; Slot *s;
+    if (!m->loading) m->loading = calloc((size_t)c->n_layers * c->n_experts, 1);
     if (lc->n < lc->cap) { s = &lc->slots[lc->n++]; slot_ensure_allocated(m, s); }
     else {
         /* LRU eviction: an unpinned slot first, else the oldest pinned one;
@@ -4749,10 +4853,11 @@ static void expert_fetch(Model *m, int layer, int eid, Slot **out, int hold) {
             pthread_mutex_lock(&g_pilot_mx);
             lru = slot_victim(lc, layer, 1);
         }
-        s = &lc->slots[lru]; s->pinned = 0;
+        s = &lc->slots[lru]; s->pinned = 0; q36_slru_drop(lc, s);
         if (vkt_ram_first(layer, s->eid)) vkt_ram_gave();
     }
     cache_hide(m, layer, s); s->used = ++m->clock;
+    if (m->loading) m->loading[gidx] = 1;
     pthread_mutex_unlock(&g_pilot_mx);
     double t_read0 = now_s();
     load_expert_merged(m, layer, eid, s);
@@ -4760,13 +4865,297 @@ static void expert_fetch(Model *m, int layer, int eid, Slot **out, int hold) {
     pthread_mutex_lock(&g_pilot_mx);
     m->t_disk += t_read;        /* sotto lock: qui arrivano anche i thread del PILOT */
     cache_publish(m, layer, s, eid); s->pinned = m->is_pinned[layer * c->n_experts + eid]; s->used = ++m->clock;
+    if (m->loading) m->loading[gidx] = 0;
     if (hold) slot_hold(s);
-    *out = s; pthread_mutex_unlock(&g_pilot_mx);
+    *out = s;
+    pthread_cond_broadcast(&g_pub_cv);
+    pthread_mutex_unlock(&g_pilot_mx);
 }
 static void expert_get(Model *m, int layer, int eid, Slot **out) { expert_fetch(m, layer, eid, out, 0); }
 /* expert_get for a caller that computes from the slot after the lock drops:
  * it stays resident until slot_release. */
 static Slot *expert_hold(Model *m, int layer, int eid) { Slot *s; expert_fetch(m, layer, eid, &s, 1); return s; }
+
+/* The resident slot of an expert, held, or NULL: never reads. Counts a hit as
+ * expert_fetch does; the miss is counted by whoever then reads it. */
+static Slot *expert_try_hold(Model *m, int layer, int eid) {
+    ehit_mark(m, layer, eid);
+    pthread_mutex_lock(&g_pilot_mx);
+    Slot *hit = slot_indexed(m, layer, eid);
+    if (hit) {
+        m->hits++; hit->used = ++m->clock;
+        if (q36_slru_on() && !hit->prot) q36_slru_promote(&m->cache[layer], hit);
+        slot_hold(hit);
+    }
+    pthread_mutex_unlock(&g_pilot_mx);
+    return hit;
+}
+/* resident in RAM or being read right now (Q36_SKIP_MISS keeps those) */
+static int expert_resident(Model *m, int layer, int eid) {
+    pthread_mutex_lock(&g_pilot_mx);
+    int r = slot_indexed(m, layer, eid) != NULL ||
+            (m->loading && m->loading[(int64_t)layer * m->c.n_experts + eid]);
+    pthread_mutex_unlock(&g_pilot_mx);
+    return r;
+}
+
+/* ---- Q36_IO_THREADS: the misses of one MoE run read in parallel ----------------------
+ * A layer's misses used to be read one after the other on the engine thread while every
+ * OpenMP thread waited: queue depth 1 on an NVMe drive that wants 8 or more. The run now
+ * holds its resident experts, hands the misses to these loaders (each one an ordinary
+ * expert_fetch, so the cache, the eviction rule and the hit counters are the same), and
+ * computes the residents while the drive works. Q36_IO_THREADS=0 restores the serial
+ * reads. The bits of every expert output and of the rank-order sum are unchanged. */
+typedef struct { Model *m; int layer, eid, hold; Slot *slot; int done; } Q36IoJob;
+#define Q36_IO_QMAX 1024
+static pthread_mutex_t g_io_mx = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_io_cv = PTHREAD_COND_INITIALIZER;        /* work queued */
+static pthread_cond_t g_io_done_cv = PTHREAD_COND_INITIALIZER;   /* a job finished */
+static Q36IoJob *g_io_q[Q36_IO_QMAX];
+static unsigned g_io_head, g_io_tail;
+static int g_io_n = -1;
+static void *q36_io_worker(void *arg) {
+    (void)arg;
+    g_q36_io_thread = 1;
+    pthread_mutex_lock(&g_io_mx);
+    for (;;) {
+        while (g_io_head == g_io_tail) pthread_cond_wait(&g_io_cv, &g_io_mx);
+        Q36IoJob *j = g_io_q[g_io_head % Q36_IO_QMAX]; g_io_head++;
+        pthread_mutex_unlock(&g_io_mx);
+        Slot *s; expert_fetch(j->m, j->layer, j->eid, &s, j->hold);
+        pthread_mutex_lock(&g_io_mx);
+        j->slot = s; j->done = 1;
+        pthread_cond_broadcast(&g_io_done_cv);
+    }
+    return NULL;
+}
+/* the loaders, started at the first use; 0 = off */
+static int q36_io_threads(void) {
+    int v = __atomic_load_n(&g_io_n, __ATOMIC_ACQUIRE);
+    if (v >= 0) return v;
+    pthread_mutex_lock(&g_io_mx);
+    if (g_io_n < 0) {
+        const char *e = getenv("Q36_IO_THREADS");
+        int n = e && *e ? atoi(e) : 8;
+        if (n < 0) n = 0;
+        if (n > 32) n = 32;
+        int started = 0;
+        for (int i = 0; i < n; i++) {
+            pthread_t t;
+            if (pthread_create(&t, NULL, q36_io_worker, NULL) != 0) break;
+            pthread_detach(t); started++;
+        }
+        if (started) fprintf(stderr, "[qwen36] %d expert loader threads: a layer's misses read in parallel (Q36_IO_THREADS=0 reads them one at a time)\n", started);
+        __atomic_store_n(&g_io_n, started, __ATOMIC_RELEASE);
+    }
+    pthread_mutex_unlock(&g_io_mx);
+    return g_io_n;
+}
+static void q36_io_submit(Q36IoJob *jobs, int n) {
+    pthread_mutex_lock(&g_io_mx);
+    for (int i = 0; i < n; i++) {
+        while (g_io_tail - g_io_head >= Q36_IO_QMAX) pthread_cond_wait(&g_io_done_cv, &g_io_mx);
+        jobs[i].done = 0; jobs[i].slot = NULL;
+        g_io_q[g_io_tail % Q36_IO_QMAX] = &jobs[i]; g_io_tail++;
+    }
+    pthread_cond_broadcast(&g_io_cv);
+    pthread_mutex_unlock(&g_io_mx);
+}
+static void q36_io_wait(Q36IoJob *jobs, int n) {
+    pthread_mutex_lock(&g_io_mx);
+    for (int i = 0; i < n; i++) while (!jobs[i].done) pthread_cond_wait(&g_io_done_cv, &g_io_mx);
+    pthread_mutex_unlock(&g_io_mx);
+}
+/* Hold the distinct experts ids[0..n): the resident ones at once, the others read by the
+ * loaders. Returns the number of jobs submitted into `jobs` (held[] of those is filled by
+ * q36_hold_finish); 0 when every one was resident. With the loaders off, reads in place. */
+static int q36_hold_begin(Model *m, int layer, const int *ids, int n, Slot **held, Q36IoJob *jobs, int *jmap) {
+    int nj = 0;
+    for (int u = 0; u < n; u++) {
+        held[u] = expert_try_hold(m, layer, ids[u]);
+        if (held[u]) continue;
+        jobs[nj].m = m; jobs[nj].layer = layer; jobs[nj].eid = ids[u]; jobs[nj].hold = 1; jmap[nj] = u; nj++;
+    }
+    if (!nj) return 0;
+    if (q36_io_threads() > 0) q36_io_submit(jobs, nj);
+    else { for (int j = 0; j < nj; j++) { held[jmap[j]] = expert_hold(m, layer, jobs[j].eid); jobs[j].done = 1; jobs[j].slot = held[jmap[j]]; } }
+    return nj;
+}
+static void q36_hold_finish(Slot **held, Q36IoJob *jobs, const int *jmap, int nj) {
+    if (!nj) return;
+    q36_io_wait(jobs, nj);
+    for (int j = 0; j < nj; j++) held[jmap[j]] = jobs[j].slot;
+}
+/* Every expert of ids[0..n) resident before a caller that holds them one at a time (the
+ * CUDA tier's CPU share, the Vulkan tier's): the misses read together, then let go. */
+static void q36_prefetch_ids(Model *m, int layer, const int *ids, int n) {
+    if (n < 2 || n > 64 || m->cache[layer].cap < n || q36_io_threads() <= 0) return;
+    int uid[64], nu = 0;
+    for (int i = 0; i < n; i++) {
+        if (ids[i] < 0) continue;
+        int j = 0; while (j < nu && uid[j] != ids[i]) j++;
+        if (j == nu) uid[nu++] = ids[i];
+    }
+    Slot *held[64]; Q36IoJob jobs[64]; int jmap[64];
+    int nj = q36_hold_begin(m, layer, uid, nu, held, jobs, jmap);
+    q36_hold_finish(held, jobs, jmap, nj);
+    for (int u = 0; u < nu; u++) if (held[u]) slot_release(held[u]);
+}
+
+/* Q36_SKIP_MISS=<w> (lossy, off by default): on a decode or verify step, a routed expert
+ * that is neither in RAM nor being read, and whose router weight (after the top-k
+ * renormalisation) is below w, is left out and the remaining weights renormalised. The
+ * first Q36_SKIP_KEEP ranks (4) always run. Each skipped expert is one SSD read less;
+ * the tail ranks of a top-8 router carry a few percent of the mass each. Judge it on
+ * quality as well as tok/s (PPL=1 on a reference, or a task eval); Q36_SKIP_RENORM=0
+ * keeps the dropped mass dropped instead. COLI_TIMERS=1 prints how many it skipped. */
+static float g_skip_w = -1.f;
+static int g_skip_keep = 4, g_skip_renorm = 1;
+static float q36_skip_w(void) {
+    if (g_skip_w < 0.f) {
+        const char *e = getenv("Q36_SKIP_MISS"), *k = getenv("Q36_SKIP_KEEP"), *r = getenv("Q36_SKIP_RENORM");
+        float w = e && *e ? (float)atof(e) : 0.f;
+        g_skip_keep = k && *k ? atoi(k) : 4;
+        if (g_skip_keep < 1) g_skip_keep = 1;
+        g_skip_renorm = !(r && *r == '0');
+        if (w > 0.5f) w = 0.5f;
+        if (w > 0.f) fprintf(stderr, "[qwen36] Q36_SKIP_MISS=%.3f: decode skips non-resident experts past rank %d below that weight (lossy)\n", w, g_skip_keep);
+        g_skip_w = w > 0.f ? w : 0.f;
+    }
+    return g_skip_w;
+}
+static void q36_skip_misses(Model *m, int layer, int *idx, float *val, int K) {
+    int drop = 0; float kept = 0.f;
+    for (int kk = 0; kk < K; kk++) {
+        if (idx[kk] < 0) continue;
+        if (kk >= g_skip_keep && val[kk] < g_skip_w && !expert_resident(m, layer, idx[kk])) {
+            idx[kk] = -1; val[kk] = 0.f; drop++;
+            continue;
+        }
+        kept += val[kk];
+    }
+    __atomic_add_fetch(&g_skip_tot, (uint64_t)K, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&g_skip_n, (uint64_t)drop, __ATOMIC_RELAXED);
+    if (drop && g_skip_renorm && kept > 0.f) for (int kk = 0; kk < K; kk++) val[kk] /= kept;
+}
+
+/* ---- Q36_HEAT: the RAM cache warm from the first token --------------------------------
+ * Every start began with an empty expert cache, so the first hundreds of tokens of each
+ * run read nearly every expert from the drive. Q36_HEAT=1 (or a path) keeps how often each
+ * (layer, expert) was routed in <model>/.q36_heat, rewritten after every turn and at exit,
+ * the history decayed by Q36_HEAT_DECAY (0.85) at each start. At start the hottest experts
+ * of every layer are read into the RAM cache (up to Q36_HEAT_FILL of its slots, 0.9) by the
+ * loader threads, hottest first, in the background: requests are served meanwhile.
+ * Q36_HEAT_WAIT=1 finishes the fill before the first token (benchmarks). Placement only:
+ * outputs are unchanged. */
+#define Q36_HEAT_MAGIC 0x48333651u   /* "Q63H" */
+static char g_heat_path[2100];
+static uint32_t *g_heat_base;        /* the file's counts, decayed, [L*E] */
+static Model *g_heat_m;
+static pthread_mutex_t g_heat_mx = PTHREAD_MUTEX_INITIALIZER;
+static void q36_heat_save(Model *m) {
+    if (!g_heat_path[0] || !m || !m->freq) return;
+    const int L = m->c.n_layers, E = m->c.n_experts;
+    if (L <= 0 || E <= 0) return;
+    pthread_mutex_lock(&g_heat_mx);
+    char tmp[2200]; snprintf(tmp, sizeof tmp, "%s.tmp", g_heat_path);
+    FILE *f = fopen(tmp, "wb");
+    if (f) {
+        uint32_t hdr[4] = { Q36_HEAT_MAGIC, 1, (uint32_t)L, (uint32_t)E };
+        int ok = fwrite(hdr, sizeof hdr, 1, f) == 1;
+        for (int64_t i = 0; ok && i < (int64_t)L * E; i++) {
+            uint64_t v = (uint64_t)(g_heat_base ? g_heat_base[i] : 0) + m->freq[i];
+            uint32_t w = v > 0xFFFFFFFFu ? 0xFFFFFFFFu : (uint32_t)v;
+            ok = fwrite(&w, 4, 1, f) == 1;
+        }
+        if (fclose(f) != 0) ok = 0;
+        if (ok) rename(tmp, g_heat_path); else remove(tmp);
+    }
+    pthread_mutex_unlock(&g_heat_mx);
+}
+static void q36_heat_atexit(void) { q36_heat_save(g_heat_m); }
+typedef struct { uint32_t n; int l, e; } Q36HeatItem;
+static int q36_heat_cmp(const void *a, const void *b) {
+    uint32_t x = ((const Q36HeatItem *)a)->n, y = ((const Q36HeatItem *)b)->n;
+    return x < y ? 1 : x > y ? -1 : 0;
+}
+static void *q36_heat_warm(void *arg) {
+    Model *m = (Model *)arg;
+    const int L = m->c.n_layers, E = m->c.n_experts;
+    Q36HeatItem *it = malloc(sizeof(Q36HeatItem) * (size_t)L * E);
+    if (!it) return NULL;
+    int n = 0;
+    for (int l = 0; l < L; l++) {
+        if (q36_dense_l(&m->c, l) || !m->cache[l].slots) continue;
+        for (int e = 0; e < E; e++) if (g_heat_base[(int64_t)l * E + e]) it[n++] = (Q36HeatItem){ g_heat_base[(int64_t)l * E + e], l, e };
+    }
+    qsort(it, (size_t)n, sizeof *it, q36_heat_cmp);
+    const char *fe = getenv("Q36_HEAT_FILL");
+    double fill = fe && *fe ? atof(fe) : 0.9;
+    if (fill < 0.05) fill = 0.05; if (fill > 1.0) fill = 1.0;
+    double t0 = now_s(); int loaded = 0;
+    Q36IoJob jobs[8]; int nj = 0;
+    for (int i = 0; i <= n; i++) {
+        if (i < n) {
+            const LCache *lc = &m->cache[it[i].l];
+            int lim = (int)(lc->cap * fill), want = 1;
+            pthread_mutex_lock(&g_pilot_mx);
+            if (lc->n >= lim || slot_indexed(m, it[i].l, it[i].e) ||
+                (m->loading && m->loading[(int64_t)it[i].l * E + it[i].e])) want = 0;
+            pthread_mutex_unlock(&g_pilot_mx);
+            if (want) { jobs[nj].m = m; jobs[nj].layer = it[i].l; jobs[nj].eid = it[i].e; jobs[nj].hold = 0; nj++; }
+        }
+        if (nj == 8 || (i == n && nj)) {   /* eight in flight: the demand reads queue behind at most these */
+            /* never held: a prefill run may need every slot of the layer it is filling */
+            if (q36_io_threads() > 0) { q36_io_submit(jobs, nj); q36_io_wait(jobs, nj); }
+            else for (int j = 0; j < nj; j++) expert_get(m, jobs[j].layer, jobs[j].eid, &jobs[j].slot);
+            pthread_mutex_lock(&g_pilot_mx);
+            m->miss -= (uint64_t)nj < m->miss ? (uint64_t)nj : m->miss;   /* a warm read is not a decode miss */
+            pthread_mutex_unlock(&g_pilot_mx);
+            loaded += nj; nj = 0;
+        }
+    }
+    free(it);
+    double dt = now_s() - t0;
+    fprintf(stderr, "[qwen36] Q36_HEAT: %d experts warm in RAM in %.1f s (%.2f GB/s)\n",
+            loaded, dt, dt > 0 ? loaded * q36_slot_real_gb(m) / dt : 0.0);
+    return NULL;
+}
+static void *q36_heat_thread(void *arg) { g_q36_io_thread = 1; return q36_heat_warm(arg); }
+/* main(), after the tiers: read the history, register the saves, start the fill */
+static void q36_heat_start(Model *m, const char *snap) {
+    const char *e = getenv("Q36_HEAT");
+    if (!e || !*e || *e == '0' || m->c.n_experts <= 0 || qq_active()) return;
+    if (!strcmp(e, "1")) snprintf(g_heat_path, sizeof g_heat_path, g_gguf ? "%s.q36_heat" : "%s/.q36_heat", snap);
+    else snprintf(g_heat_path, sizeof g_heat_path, "%s", e);
+    const int L = m->c.n_layers, E = m->c.n_experts;
+    g_heat_m = m;
+    atexit(q36_heat_atexit);
+    FILE *f = fopen(g_heat_path, "rb");
+    if (!f) { fprintf(stderr, "[qwen36] Q36_HEAT: no history yet at %s (written after the first turn)\n", g_heat_path); return; }
+    uint32_t hdr[4];
+    g_heat_base = calloc((size_t)L * E, sizeof(uint32_t));
+    int ok = g_heat_base && fread(hdr, sizeof hdr, 1, f) == 1 && hdr[0] == Q36_HEAT_MAGIC && hdr[1] == 1 &&
+             hdr[2] == (uint32_t)L && hdr[3] == (uint32_t)E &&
+             fread(g_heat_base, 4, (size_t)L * E, f) == (size_t)L * E;
+    fclose(f);
+    if (!ok) {
+        fprintf(stderr, "[qwen36] Q36_HEAT: %s is not a history of this model's shape; starting a new one\n", g_heat_path);
+        free(g_heat_base); g_heat_base = NULL; return;
+    }
+    const char *de = getenv("Q36_HEAT_DECAY");
+    double d = de && *de ? atof(de) : 0.85;
+    if (d <= 0.0 || d > 1.0) d = 0.85;
+    for (int64_t i = 0; i < (int64_t)L * E; i++) g_heat_base[i] = (uint32_t)(g_heat_base[i] * d + 0.5);
+    if (m->hits + m->miss > 0 || (qt_ready() && qt_experts_on())) {
+        fprintf(stderr, "[qwen36] Q36_HEAT: the cache was already filled by a device tier's warm start; history kept, no RAM fill\n");
+        return;
+    }
+    pthread_t t;
+    const char *w = getenv("Q36_HEAT_WAIT");
+    if (w && *w == '1') { q36_heat_warm(m); return; }
+    if (pthread_create(&t, NULL, q36_heat_thread, m) == 0) pthread_detach(t);
+}
 
 static void pin_hot_experts(Model *m) {
     Cfg *c = &m->c;
@@ -4815,6 +5204,7 @@ static void pin_hot_experts(Model *m) {
                     __atomic_store_n(&pilot_w, w + 1, __ATOMIC_RELEASE);
                 }
                 pthread_mutex_unlock(&g_pilot_mx);
+                q36_pilot_kick();
             }
             pinned_total++;
         }
@@ -5188,8 +5578,68 @@ static void moe_xf_run(Model *m, int layer, const float *x, int S, float *out, c
     void *scratch = malloc(xf_moe_scratch_bytes(per_max, kper, D, F));
     if (!ex || !exp || !ridx || !held || !scratch) { fprintf(stderr, "OOM moe_xf_run\n"); exit(1); }
     int timed = tm_on() && S == 1;
+    /* the run's distinct experts read together (Q36_IO_THREADS): only where every expert
+     * of a run is held at once, so a load can never evict one the run still needs */
+    const int par = kper == K && q36_io_threads() > 0;
+    int *uid = NULL, *pu = NULL, *jmap = NULL; Slot **uslot = NULL; Q36IoJob *jobs = NULL; float *ctb = NULL;
+    const int ovl_max = 64;   /* pairs a run may split into residents first, misses after */
+    if (par) {
+        uid = malloc(sizeof(int) * (size_t)n); pu = malloc(sizeof(int) * (size_t)n); jmap = malloc(sizeof(int) * (size_t)n);
+        uslot = malloc(sizeof(Slot *) * (size_t)n); jobs = malloc(sizeof(Q36IoJob) * (size_t)n);
+        ctb = n <= ovl_max ? falloc((int64_t)n * D) : NULL;
+        if (!uid || !pu || !jmap || !uslot || !jobs || (n <= ovl_max && !ctb)) { fprintf(stderr, "OOM moe_xf_run\n"); exit(1); }
+    }
     for (int s0 = 0, per; s0 < S; s0 += per) {
         per = per_max > 1 ? xf_rows_fit(idx, s0, S, K, room, per_max) : 1;
+        if (par) {
+            double t0 = timed ? tm_now() : 0, tc = 0;
+            const int np = per * kper;
+            int nu = 0;
+            for (int i = 0; i < np; i++) {
+                int src = s0 * K + i;   /* kper == K: pair i of the run is pair src of the batch */
+                ridx[i] = idx[src]; rval[i] = val[src]; exp[i] = NULL; pu[i] = -1;
+                if (idx[src] < 0) continue;
+                int u = 0; while (u < nu && uid[u] != idx[src]) u++;
+                if (u == nu) uid[nu++] = idx[src];
+                pu[i] = u;
+            }
+            int nj = q36_hold_begin(m, layer, uid, nu, uslot, jobs, jmap);
+            const int split = nj > 0 && nj < nu && np <= ovl_max;   /* residents now, while the misses read */
+            if (split) {
+                for (int i = 0; i < np; i++) if (pu[i] >= 0 && uslot[pu[i]]) { ex[i] = xf_slot_expert(m, uslot[pu[i]]); exp[i] = &ex[i]; }
+                double c0 = timed ? tm_now() : 0;
+                xf_moe_compute(ctb, x + (int64_t)s0 * D, per, kper, D, F, ridx, exp, xf_run_mode(m), scratch);
+                if (timed) tc += tm_now() - c0;
+                for (int i = 0; i < np; i++) exp[i] = NULL;
+                for (int j = 0; j < nj; j++) uslot[jmap[j]] = NULL;   /* the misses, which q36_hold_finish fills */
+            }
+            q36_hold_finish(uslot, jobs, jmap, nj);
+            for (int i = 0; i < np; i++) {
+                if (pu[i] < 0) continue;
+                if (split) {   /* the residents were computed above */
+                    int miss = 0; for (int j = 0; j < nj && !miss; j++) miss = jmap[j] == pu[i];
+                    if (!miss) continue;
+                }
+                ex[i] = xf_slot_expert(m, uslot[pu[i]]); exp[i] = &ex[i];
+            }
+            double t1 = timed ? tm_now() : 0;
+            if (split) {
+                xf_moe_compute(ctb, x + (int64_t)s0 * D, per, kper, D, F, ridx, exp, xf_run_mode(m), scratch);
+                /* xf_moe_add's rank-order sum over every pair, residents and misses alike */
+                #pragma omp parallel for schedule(static) if (per > 1)
+                for (int s = 0; s < per; s++) {
+                    float *os = out + (int64_t)(s0 + s) * D;
+                    for (int k = 0; k < kper; k++) {
+                        int i = s * kper + k; if (ridx[i] < 0 || pu[i] < 0) continue;
+                        float w = rval[i]; const float *cc = ctb + (int64_t)i * D;
+                        for (int d = 0; d < D; d++) os[d] += w * cc[d];
+                    }
+                }
+            } else xf_moe_add(out + (int64_t)s0 * D, x + (int64_t)s0 * D, per, kper, D, F, ridx, rval, exp, xf_run_mode(m), scratch);
+            if (timed) { double t2 = tm_now(); g_xf_load += (t1 - t0) - tc; g_xf_run += (t2 - t1) + tc; }
+            for (int u = 0; u < nu; u++) slot_release(uslot[u]);
+            continue;
+        }
         for (int k0 = 0; k0 < K; k0 += kper) {
             double t0 = timed ? tm_now() : 0;
             for (int s = 0; s < per; s++) for (int k = 0; k < kper; k++) {
@@ -5207,6 +5657,7 @@ static void moe_xf_run(Model *m, int layer, const float *x, int S, float *out, c
         }
     }
     free(ex); free(exp); free(ridx); free(rval); free(held); free(scratch);
+    free(uid); free(pu); free(jmap); free(uslot); free(jobs); free(ctb);
 }
 
 /* The CUDA tier's CPU share of one token: the routed experts qt_issue left
@@ -5222,6 +5673,11 @@ static void moe_gq_run(Model *m, int layer, const float *x, int S, float *out, c
 static void qt_cpu_misses(Model *m, int layer, const float *xs, const int *idx, const float *val,
                           uint32_t mask, float *os, float *g, float *u, float *hh) {
     Cfg *c = &m->c; int D = q36_eh(c), K = c->topk, I = c->inter;
+    {   /* the CPU's misses read together before the loops below hold them one by one */
+        int ids[64], n = 0;
+        for (int kk = 0; kk < K && kk < 64; kk++) if (idx[kk] >= 0 && !(mask & (1u << kk))) ids[n++] = idx[kk];
+        q36_prefetch_ids(m, layer, ids, n);
+    }
     if (g_gguf) {   /* a GGUF's misses through its own CPU path, each offered to the tier first */
         int mi[64]; float mv[64];
         for (int kk = 0; kk < K && kk < 64; kk++) {
@@ -5458,6 +5914,11 @@ static void moe_vk_xf_cpu(Model *m, int layer, const float *x, int S, const int 
     float *lctb = falloc((int64_t)n * D);
     void *scratch = malloc(xf_moe_scratch_bytes(per, kper, D, F));
     if (!ex || !exp || !ridx || !held || !scratch) { fprintf(stderr, "OOM moe_vk_xf_cpu\n"); exit(1); }
+    if (S * K <= 64) {   /* a decode or verify step: its CPU misses read together */
+        int ids[64], nid = 0;
+        for (int i = 0; i < S * K; i++) if (idx[i] >= 0 && want[i]) ids[nid++] = idx[i];
+        q36_prefetch_ids(m, layer, ids, nid);
+    }
     for (int s0 = 0; s0 < S; s0 += per)
         for (int k0 = 0; k0 < K; k0 += kper) {
             int any = 0;
@@ -5926,6 +6387,7 @@ static void moe_ex(Model *m, Layer *l, int layer, float *x, int S, float *out,
                 }
             }
         } else if (use_xf || use_vk || use_gq) {
+            if (use_xf && S <= 8 && q36_skip_w() > 0.f) q36_skip_misses(m, layer, idx, val, K);
             for (int kk = 0; kk < K; kk++) { xidx[s*K+kk] = idx[kk]; xval[s*K+kk] = val[kk]; }
             if (use_vk && m->vk_hist) rt_count(layer, idx, K);   /* the tier's history (.coli_usage) */
         } else if (use_qt) {
@@ -7130,36 +7592,55 @@ static float *q36_step_rows(Model *m, const Q36Row *rows, const int *ids, int S)
 
 static void pilot_realload(Model *m, int layer, int eid) {
     LCache *lc = &m->cache[layer]; Cfg *c = &m->c;
+    const int64_t gidx = (int64_t)layer * c->n_experts + eid;
     pthread_mutex_lock(&g_pilot_mx);
-    if (!m->is_queued[layer * c->n_experts + eid]) { pthread_mutex_unlock(&g_pilot_mx); return; }
-    if (slot_indexed(m, layer, eid)) { m->is_queued[layer*c->n_experts+eid]=0; pthread_mutex_unlock(&g_pilot_mx); return; }
+    if (!m->is_queued[gidx]) { pthread_mutex_unlock(&g_pilot_mx); return; }
+    if (slot_indexed(m, layer, eid) || (m->loading && m->loading[gidx])) { m->is_queued[gidx]=0; pthread_mutex_unlock(&g_pilot_mx); return; }
+    if (!m->loading) m->loading = calloc((size_t)c->n_layers * c->n_experts, 1);
     Slot *s;
     if (lc->n < lc->cap) { s = &lc->slots[lc->n++]; slot_ensure_allocated(m, s); }
     else {
         int lru = slot_victim(lc, layer, 0);
-        if (lru < 0) { m->is_queued[layer*c->n_experts+eid]=0; pthread_mutex_unlock(&g_pilot_mx); return; }
-        s = &lc->slots[lru]; s->pinned = 0;
+        if (lru < 0) { m->is_queued[gidx]=0; pthread_mutex_unlock(&g_pilot_mx); return; }
+        s = &lc->slots[lru]; s->pinned = 0; q36_slru_drop(lc, s);
         if (vkt_ram_first(layer, s->eid)) vkt_ram_gave();
     }
     cache_hide(m, layer, s); s->used = ++m->clock;
+    if (m->loading) m->loading[gidx] = 1;
     pthread_mutex_unlock(&g_pilot_mx);
     double t_read0 = now_s();
     load_expert_merged(m, layer, eid, s);
     double t_read = now_s() - t_read0;
     pthread_mutex_lock(&g_pilot_mx);
     m->t_disk += t_read;        /* sotto lock: qui arrivano anche i thread del PILOT */
-    cache_publish(m, layer, s, eid); s->pinned = m->is_pinned[layer*c->n_experts+eid]; s->used = ++m->clock;
-    m->is_queued[layer*c->n_experts+eid] = 0; pthread_mutex_unlock(&g_pilot_mx);
+    cache_publish(m, layer, s, eid); s->pinned = m->is_pinned[gidx]; s->used = ++m->clock;
+    if (m->loading) m->loading[gidx] = 0;
+    m->is_queued[gidx] = 0;
+    pthread_cond_broadcast(&g_pub_cv);
+    pthread_mutex_unlock(&g_pilot_mx);
 }
 
 static void *pilot_worker(void *arg) {
     (void)arg;
+    g_q36_io_thread = 1;
     while (1) {
         int layer, eid;
-        if (!pilot_claim(&layer, &eid)) { sleep_ms(1); continue; }
+        if (!pilot_claim(&layer, &eid)) {
+            pthread_mutex_lock(&g_pilot_qmx);
+            while (__atomic_load_n(&pilot_r, __ATOMIC_ACQUIRE) == __atomic_load_n(&pilot_w, __ATOMIC_ACQUIRE))
+                pthread_cond_wait(&g_pilot_qcv, &g_pilot_qmx);
+            pthread_mutex_unlock(&g_pilot_qmx);
+            continue;
+        }
         pilot_realload(pilot_m, layer, eid);
     }
     return NULL;
+}
+/* after a store to pilot_w: wake the workers */
+static void q36_pilot_kick(void) {
+    pthread_mutex_lock(&g_pilot_qmx);
+    pthread_cond_broadcast(&g_pilot_qcv);
+    pthread_mutex_unlock(&g_pilot_qmx);
 }
 
 static int pilot_claim(int *layer, int *eid) {
@@ -7239,7 +7720,7 @@ static void pilot_prefetch(Model *m, int lnext, const float *x, int S) {
                 if (!already_queued) {
                     unsigned w2 = __atomic_load_n(&pilot_w, __ATOMIC_RELAXED);
                     unsigned r2 = __atomic_load_n(&pilot_r, __ATOMIC_ACQUIRE);
-                    if (w2 - r2 < 4096) { pilot_q[w2 & 4095].l = lnext; pilot_q[w2 & 4095].e = eid; __atomic_store_n(&pilot_w, w2+1, __ATOMIC_RELEASE); }
+                    if (w2 - r2 < 4096) { pilot_q[w2 & 4095].l = lnext; pilot_q[w2 & 4095].e = eid; __atomic_store_n(&pilot_w, w2+1, __ATOMIC_RELEASE); q36_pilot_kick(); }
                     else { pthread_mutex_lock(&g_pilot_mx); m->is_queued[gidx] = 0; pthread_mutex_unlock(&g_pilot_mx); }
                 }
             }
@@ -7745,6 +8226,12 @@ static void q36_spec_begin(Model *m, Q36Spec *sp, const int *prompt, int np) {
     e = getenv("COLI_SPEC_GATE");
     spec_gate_init(&sp->gate, e && *e == '0');
     int tier_off = (qt_ready() || m->dn_dev) && !q36_cuda_tier_drafts(m);
+    /* Q36_SPEC_LOOSE=1: drafts also beside a CUDA tier that holds the trunk only (every routed
+     * expert on the CPU). A verify row's trunk GEMVs may then round differently from a decode
+     * step's, so the text can differ from plain decoding in near ties; each token is still the
+     * model's own prediction. */
+    {   const char *lo = getenv("Q36_SPEC_LOOSE");
+        if (tier_off && lo && *lo == '1' && qt_ready() && !qt_experts_on() && !m->dn_dev) tier_off = 0; }
     if (sp->lookup && (tier_off || g_cache_route || qq_active())) {
         static int said;
         if (!said && asked) {   /* the default stays quiet: nothing was asked for */
@@ -8577,6 +9064,7 @@ static void serve_one_turn(Model *m, ServeReq *q){
     fflush(stdout);
     {char scope[96]; snprintf(scope, sizeof scope, "turn %s", q->id); q36_spec_report(&spec, scope);}
     q36_spec_free(&spec);
+    q36_heat_save(m);
 #ifdef COLI_CUDA
     q36cc_report(m);
 #endif
@@ -9094,6 +9582,7 @@ static void serve_mux(Model *m){
             vk_tier_turn(m, "turn");
 #endif
             emap_emit(m);
+            q36_heat_save(m);
         }
     }
     fprintf(stderr, "[qwen36] KV_SLOTS=%d: %llu decode steps, %llu rows (%.2f a step)\n", n, steps, nrows,
@@ -9345,6 +9834,37 @@ static void q36_dho_start(Model *m) {
     q36_dho_each(m, q36_dho_drop, &bytes, &n);
     q36_dho_placed();
 }
+/* The dense host copies the device now holds alone were part of the resident set an
+ * auto-sized expert cache was priced against: that RAM goes to the cache (90% of it),
+ * before anything was routed. Nothing holds a Slot yet, so the arrays may move. */
+static int q36_cache_grow_dropped(Model *m, int cap) {
+    unsigned long long b = coli_vk_dense_host_dropped_bytes();
+    const Cfg *c = &m->c;
+    if (!b || !m->cache || c->n_experts <= 0) return cap;
+    int L = 0;
+    for (int i = 0; i < c->n_layers; i++) L += m->cache[i].slots != NULL;
+    double slot = q36_slot_real_gb(m) * 1e9;
+    if (L < 1 || slot <= 0.0) return cap;
+    int add = (int)((double)b * 0.9 / (slot * L)), was = 0, now = 0;
+    if (add < 1) return cap;
+    pthread_mutex_lock(&g_pilot_mx);
+    for (int i = 0; i < c->n_layers; i++) {
+        LCache *lc = &m->cache[i];
+        if (!lc->slots) continue;
+        int nc = lc->cap + add;
+        if (nc > c->n_experts) nc = c->n_experts;
+        if (nc <= lc->cap) continue;
+        Slot *ns = realloc(lc->slots, (size_t)nc * sizeof(Slot));
+        if (!ns) continue;
+        memset(ns + lc->cap, 0, (size_t)(nc - lc->cap) * sizeof(Slot));
+        lc->slots = ns; was = lc->cap; lc->cap = nc; now = nc;
+    }
+    pthread_mutex_unlock(&g_pilot_mx);
+    if (!now) return cap;
+    fprintf(stderr, "[VK] qwen36: %.2f GiB of dense host copies now live on the device only: expert cache %d -> %d slots a layer\n",
+            b / 1073741824.0, was, now);
+    return now;
+}
 
 /* The tier's streaming (a big prompt chunk's cold experts on the device): an expert's
  * bytes as the CPU path would have them, its RAM cache or the disk, held until the tier
@@ -9478,7 +9998,43 @@ static void vk_tier_start(Model *m, const char *snap, int cap, int expert_is_int
 }
 #endif
 
+#ifdef _WIN32
+/* Windows 11 runs a console process whose output is piped to the gateway as background
+ * work when it likes (EcoQoS: low clocks, efficiency scheduling, timer requests ignored).
+ * The engine opts out of that and takes one priority step up. Q36_WIN_TUNE=0 skips both.
+ * Q36_WS_MIN_GB=<GB> asks for a soft minimum working set, so a memory squeeze trims other
+ * processes before the expert cache is paged out. */
+static void q36_win_tune(void) {
+    const char *e = getenv("Q36_WIN_TUNE");
+    if (e && *e == '0') return;
+    typedef BOOL (WINAPI *SetProcInfo)(HANDLE, int, LPVOID, DWORD);
+    SetProcInfo spi = (SetProcInfo)(void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "SetProcessInformation");
+    if (spi) {
+        struct { ULONG Version, ControlMask, StateMask; } pt = { 1, 0x1 | 0x4, 0 };   /* execution speed, timer resolution: not throttled */
+        if (!spi(GetCurrentProcess(), 4 /* ProcessPowerThrottling */, &pt, sizeof pt)) {
+            pt.ControlMask = 0x1;
+            spi(GetCurrentProcess(), 4, &pt, sizeof pt);
+        }
+    }
+    SetPriorityClass(GetCurrentProcess(), ABOVE_NORMAL_PRIORITY_CLASS);
+    const char *ws = getenv("Q36_WS_MIN_GB");
+    if (ws && *ws && atof(ws) > 0.0) {
+        SIZE_T mn = (SIZE_T)(atof(ws) * 1073741824.0);
+        MEMORYSTATUSEX ms; ms.dwLength = sizeof ms;
+        SIZE_T mx = GlobalMemoryStatusEx(&ms) ? (SIZE_T)ms.ullTotalPhys : mn * 2;
+        if (mx < mn) mx = mn;
+        typedef BOOL (WINAPI *SetWs)(HANDLE, SIZE_T, SIZE_T, DWORD);
+        SetWs sws = (SetWs)(void *)GetProcAddress(GetModuleHandleA("kernel32.dll"), "SetProcessWorkingSetSizeEx");
+        if (!sws || !sws(GetCurrentProcess(), mn, mx, 0x2 /* MIN_DISABLE: soft */ | 0x8 /* MAX_DISABLE */))
+            fprintf(stderr, "[qwen36] Q36_WS_MIN_GB: SetProcessWorkingSetSizeEx failed (%lu)\n", (unsigned long)GetLastError());
+    }
+}
+#endif
+
 int main(int argc, char **argv) {
+#ifdef _WIN32
+    q36_win_tune();
+#endif
     /* Physical-core team sizing, as colibri/inkling/kimi_k3/olmoe/deepseek-v41
      * do. Without it this engine takes one thread per logical CPU, which on an
      * SMT host doubles the team for no arithmetic and pays a barrier per tiny
@@ -9851,7 +10407,12 @@ int main(int argc, char **argv) {
         fprintf(stderr, "[qwen36] COLI_CUDA=1: the VRAM expert tier does not take the mixed layout (one format per expert): "
                         "the routed experts stay on the CPU\n");
     /* The sentinel never leaves main() unresolved: see qwen36_resolved_cap. */
+    const int cap_auto = cap <= 0;
+    (void)cap_auto;
     cap = qwen36_resolved_cap(cap, m.cache, m.c.n_layers);
+    /* an explicit cap the RAM could not hold was clamped in model_init_range: the tiers
+     * must see the cache that exists (qt_init keeps slot pointers only at full residency) */
+    if (m.cache && m.c.n_layers > 0 && m.cache[0].cap > 0 && m.cache[0].cap < cap) cap = m.cache[0].cap;
     /* A GGUF's experts go to the CUDA tier as the file has them (the backend's block formats)
      * when every layer's types are ones the dense chain's frame computes (cc_moe); else the
      * tier holds the trunk only and the experts stay the CPU's. */
@@ -10023,6 +10584,7 @@ int main(int argc, char **argv) {
             q36_dho_placed();
         }
     }
+    if (cap_auto) cap = q36_cache_grow_dropped(&m, cap);   /* the RAM the device-only trunk gave back */
     vk_tier_start(&m, snap, cap, expert_is_int4, expert_mixed);   /* COLI_VULKAN=1: hot routed experts on the device */
     if (g_vk_ready && !vkt_ready() && !g_vk_dense) g_vk_dense = coli_vk_dense_decide("qwen36", 0, 1);   /* no tier after all */
     if (g_vk_chain && qt_ready()) {   /* the CUDA tier keeps its priority */
@@ -10041,6 +10603,7 @@ int main(int argc, char **argv) {
 #endif
         if (!dev) q36_trunk_q8_interleave(&m);
     }
+    q36_heat_start(&m, snap);   /* Q36_HEAT: the RAM cache warm from its history */
     /* coli serve mode: speak the gateway wire protocol instead of argv
      * generation. AFTER the tier init: serve sessions ride the VRAM experts
      * exactly like argv runs, and serve_loop never returns. */

@@ -138,3 +138,32 @@ A/B protocol:
 - No measurement on the RTX 3050 / 5800HS. Bandwidths, OS RAM use, VRAM taken by the display, and the probe verdict on that GPU are assumptions.
 - The fake-CUDA chain test is timing-sensitive. It failed once out of six runs under concurrent compile load, and that test does not cover the changed code.
 - Build used zig cc (`x86_64-windows-gnu`). An MSVC + nvcc CUDA build was not done here.
+
+## 9. Turbo change set (SSD path, RAM cache, GPU options)
+
+Written without access to the target, so every speed claim is a **[hypothesis]**
+until `benchmark-results\turbo-qwen36.bat bench` runs there. Root causes are **[code]**.
+
+| # | Root cause | Change | Switch |
+|---|---|---|---|
+| 1 | A layer's cache misses were read one after another on the engine thread (queue depth 1) while the 7 other OpenMP threads waited. | The run holds its resident experts, hands the misses to loader threads (8 reads in flight) and computes the residents while they read; misses are computed after. Same per-expert outputs, same rank-order sum, so the same bits. | `Q36_IO_THREADS` (8; 0 = old path) |
+| 2 | A demand read and a PILOT read of the same expert both went to the drive. | Per-(layer, expert) in-flight flag; the second reader waits for the first. | always |
+| 3 | PILOT workers polled with `Sleep(1)`: 15.6 ms on a default Windows timer, longer than a layer. Each loader also opened its own OpenMP team for the repack, 8 more spinning threads per loader. | Condition-variable wake-up; loader threads repack serially. | `PILOT=1 PILOT_WORKERS=4` to A/B |
+| 4 | The auto cache priced a slot with one scale per row; gs64 keeps one per 64 weights, so the cache took ~12% more RAM than its budget. An explicit `--cap 256` (18 GB of slots) on 16 GB paged the cache to the same SSD. | Cap sized at the real slot size; an explicit cap past free RAM is clamped. | `Q36_RAM_FRAC`, `Q36_CAP_FORCE=1` |
+| 5 | Every start began with an empty RAM cache. | `.q36_heat` routing history, refilled hottest-first by the loaders in the background at start. | `Q36_HEAT=1`, `Q36_HEAT_WAIT=1` (bench) |
+| 6 | Plain LRU lets one-off experts flush the hot set. | Segmented LRU (probation / protected). | `Q36_EVICT=slru`, `Q36_SLRU_PROT` |
+| 7 | Windows 11 may run a piped console engine under EcoQoS. | Opt out of power throttling, ABOVE_NORMAL priority. | `Q36_WIN_TUNE=0` disables; `Q36_WS_MIN_GB` soft working-set floor |
+| 8 | Vulkan device-only trunk dropped ~1.9 GB of host copies after the cache was already sized. | That RAM is added to the (still empty) auto-sized cache. | `GPU=vk` in the launcher |
+| 9 | A trunk-only CUDA tier turned prompt lookup off. | Opt-in drafts beside a trunk-only tier. | `Q36_SPEC_LOOSE=1` |
+| 10 | Lossy, opt-in: tail experts that are not in RAM cost a full SSD read for a few percent of router mass. | Skip them on decode, renormalise. Judge with `PPL=1`. | `Q36_SKIP_MISS=0.06`, `Q36_SKIP_KEEP=4` |
+
+Build and run on the target:
+
+```cmd
+c\build-turbo.bat            :: CPU (or: cuda, vk)
+benchmark-results\turbo-qwen36.bat bench      :: 3 times; compare bench-turbo-N.log
+benchmark-results\turbo-qwen36.bat            :: serve
+```
+
+In a log, check `cache auto-sized`, `expert loader threads`, `Q36_HEAT: ... warm`,
+`expert kernel: fetch | compute` and the hit rate.
