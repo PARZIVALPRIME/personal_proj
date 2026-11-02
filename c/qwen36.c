@@ -1567,6 +1567,7 @@ double g_dn_sub[4];                           /* DN: proj, conv+split, l2n+rec, 
 double g_tm_step=0;                           /* step() total (decode) */
 static double g_xf_load=0, g_xf_run=0;        /* expert_ffn path: expert fetch (misses) vs compute, decode */
 static uint64_t g_skip_n, g_skip_tot;          /* Q36_SKIP_MISS: routed experts skipped / seen */
+static uint64_t g_la_sent;                     /* Q36_LOOKAHEAD: reads issued ahead */
 static double g_tm_win_moe=0; static int g_tm_win_n=0;
 static void tm_add(int S, int idx, double ms){
     if(S==1){
@@ -1602,6 +1603,9 @@ static void tm_report(void){
     if(g_skip_tot>0)
         fprintf(stderr,"[timers]   Q36_SKIP_MISS: %llu of %llu routed experts skipped (%.1f%%)\n",
                 (unsigned long long)g_skip_n,(unsigned long long)g_skip_tot,100.0*(double)g_skip_n/(double)g_skip_tot);
+    if(g_la_sent>0)
+        fprintf(stderr,"[timers]   Q36_LOOKAHEAD: %llu expert reads issued ahead (%.1f a token)\n",
+                (unsigned long long)g_la_sent, g_tm_dec_tokens?(double)g_la_sent/g_tm_dec_tokens:0.0);
     if(g_qt_iss+g_qt_cpu+g_qt_tak>0)
         fprintf(stderr,"[timers]   qtier: issue %.2f | cpu-miss %.2f | take %.2f ms/token\n",
                 g_qt_iss/g_tm_dec_tokens, g_qt_cpu/g_tm_dec_tokens, g_qt_tak/g_tm_dec_tokens);
@@ -3362,7 +3366,7 @@ static void q36_dho_each(Model *m, void (*f)(QW *, size_t *, int *), size_t *byt
     f(&m->lm_head, bytes, n);
     for (int i = 0; i < m->c.n_layers; i++) {
         Layer *l = &m->L[i];
-        QW *ws[] = {&l->q, &l->k, &l->v, &l->o, &l->gate, &l->sh_g, &l->sh_u, &l->sh_d,
+        QW *ws[] = {&l->q, &l->k, &l->v, &l->o, &l->sh_g, &l->sh_u, &l->sh_d,   /* the router stays: Q36_LOOKAHEAD reads it */
                     &l->dn_qkv, &l->dn_z, &l->dn_out};
         for (size_t k = 0; k < sizeof ws / sizeof ws[0]; k++) f(ws[k], bytes, n);
     }
@@ -4431,6 +4435,20 @@ static int qwen36_cap_for_ram(double resident_gb, double avail_gb, double ram_gb
     return derived;
 }
 
+/* A planar slot's bytes, page aligned: Q36_XPACK reads an expert straight into them
+ * with unbuffered I/O. Free with q36_pw_free. */
+static void *q36_pw_alloc(size_t n) {
+    void *p = NULL;
+    return posix_memalign(&p, 4096, (n + 4095) & ~(size_t)4095) ? NULL : p;
+}
+static void q36_pw_free(void *p) {
+#ifdef _WIN32
+    compat_aligned_free(p);
+#else
+    free(p);
+#endif
+}
+
 static void slot_ensure_allocated(Model *m, Slot *s) {
     if (s->g || s->pw || s->gqe) return;
     Cfg *c = &m->c;
@@ -4446,13 +4464,13 @@ static void slot_ensure_allocated(Model *m, Slot *s) {
         /* half the bytes of the int8 block: the int4 stays packed */
         g_pw_gp = ng / 2;
         if (xf_r16(m)) {   /* codes and scales together in xf16 groups: the same bytes, no scale arrays */
-            s->pw = malloc((size_t)(ng + ng + nd) / 2 + (size_t)(2 * scale_count_gu(c) + scale_count_d(c)) * sizeof(float));
+            s->pw = q36_pw_alloc((size_t)(ng + ng + nd) / 2 + (size_t)(2 * scale_count_gu(c) + scale_count_d(c)) * sizeof(float));
             if (!s->pw) { fprintf(stderr, "Error: OOM allocating slot weights\n"); exit(1); }
             s->gs = s->us = s->ds = NULL;
             s->pinned = 0; s->is_int4 = 1; s->g = s->u = s->d = NULL; s->g4 = s->u4 = s->d4 = NULL;
             return;
         }
-        s->pw = malloc((size_t)(ng + ng + nd) / 2);
+        s->pw = q36_pw_alloc((size_t)(ng + ng + nd) / 2);
         if (!s->pw) { fprintf(stderr, "Error: OOM allocating slot weights\n"); exit(1); }
         float *s_block = falloc(2*scale_count_gu(c) + scale_count_d(c));
         s->gs = s_block; s->us = s_block + scale_count_gu(c); s->ds = s_block + 2*scale_count_gu(c);
@@ -4531,6 +4549,47 @@ static void unpack_int4_to_int8(int8_t *out, const uint8_t *raw, int64_t n)
     }
 }
 
+/* ---- Q36_XPACK: every expert as its slot holds it, one aligned record each -------------
+ * An int4 gs64 miss used to be two buffered reads (the codes, then the scales from another
+ * tensor) and a repack into the xf16 groups on the reading thread: measured 1.25 GB/s with
+ * eight loaders, CPU-bound on the repack. experts.q36x holds the repacked bytes, so a miss
+ * is one unbuffered read straight into the slot, split into Q36_XPACK_PARTS reads in flight
+ * at once. Built once (Q36_XPACK_BUILD=1), checked against the container at every start. */
+#define Q36_XP_HDR 4096
+static int g_xp_fd = -1;
+static int64_t g_xp_stride;
+static int g_xp_parts = 4;
+static int q36_xpack_read(Model *m, int layer, int eid, Slot *s) {
+    const int64_t off = Q36_XP_HDR + ((int64_t)layer * m->c.n_experts + eid) * g_xp_stride;
+    const int64_t len = g_xp_stride;
+    int parts = g_xp_parts;
+    int64_t chunk = (len / parts + 4095) & ~(int64_t)4095;
+    if (chunk < 4096) { chunk = len; parts = 1; }
+#ifdef _WIN32
+    HANDLE h = (HANDLE)_get_osfhandle(g_xp_fd);
+    OVERLAPPED ov[16]; HANDLE ev[16]; DWORD want[16]; int np = 0, ok = 1;
+    for (int64_t at = 0; at < len && np < 16; at += chunk, np++) {
+        want[np] = (DWORD)(len - at < chunk ? len - at : chunk);
+        memset(&ov[np], 0, sizeof ov[np]);
+        ov[np].Offset = (DWORD)((off + at) & 0xFFFFFFFFu); ov[np].OffsetHigh = (DWORD)((uint64_t)(off + at) >> 32);
+        ov[np].hEvent = ev[np] = CreateEventA(NULL, TRUE, FALSE, NULL);
+        if (!ev[np] || (!ReadFile(h, s->pw + at, want[np], NULL, &ov[np]) && GetLastError() != ERROR_IO_PENDING)) {
+            if (ev[np]) CloseHandle(ev[np]);
+            ok = 0; break;
+        }
+    }
+    for (int i = 0; i < np; i++) {
+        DWORD rd = 0;
+        if (!GetOverlappedResult(h, &ov[i], &rd, TRUE) || rd != want[i]) ok = 0;
+        CloseHandle(ev[i]);
+    }
+    return ok;
+#else
+    (void)parts;
+    return pread(g_xp_fd, s->pw, (size_t)len, (off_t)off) == (ssize_t)len;
+#endif
+}
+
 static void load_expert_merged(Model *m, int layer, int eid, Slot *s) {
     /* new bytes in the slot: the copy derived from the last ones (gq_slot_i8's int8,
      * gq_slot_file_rows' file rows, keyed by t8_eid) is stale. The CUDA tier's copy-mode
@@ -4578,6 +4637,11 @@ static void load_expert_merged(Model *m, int layer, int eid, Slot *s) {
         }
         s->is_int4 = 0;
         return;
+    }
+    if (__atomic_load_n(&g_xp_fd, __ATOMIC_ACQUIRE) >= 0 && s->pw && xf_r16(m)) {
+        if (q36_xpack_read(m, layer, eid, s)) { s->is_int4 = 1; return; }
+        fprintf(stderr, "[qwen36] Q36_XPACK: reading layer %d expert %d failed; the container from here on\n", layer, eid);
+        __atomic_store_n(&g_xp_fd, -1, __ATOMIC_RELEASE);   /* left open: another loader may be inside a read */
     }
     char nm[256], qsnm[256];
     int la = m->active_of[layer];   /* container stores experts under active index */
@@ -4875,6 +4939,36 @@ static void expert_get(Model *m, int layer, int eid, Slot **out) { expert_fetch(
  * it stays resident until slot_release. */
 static Slot *expert_hold(Model *m, int layer, int eid) { Slot *s; expert_fetch(m, layer, eid, &s, 1); return s; }
 
+/* A read nobody waits for (Q36_LOOKAHEAD, Q36_HEAT): it gives up rather than wait for a
+ * slot, never takes a protected or pinned one, and counts neither a hit nor a miss. */
+static void expert_prefetch_spec(Model *m, int layer, int eid) {
+    LCache *lc = &m->cache[layer]; Cfg *c = &m->c;
+    const int64_t gidx = (int64_t)layer * c->n_experts + eid;
+    pthread_mutex_lock(&g_pilot_mx);
+    if (slot_indexed(m, layer, eid) || (m->loading && m->loading[gidx])) { pthread_mutex_unlock(&g_pilot_mx); return; }
+    if (!m->loading) m->loading = calloc((size_t)c->n_layers * c->n_experts, 1);
+    Slot *s;
+    if (lc->n < lc->cap) { s = &lc->slots[lc->n++]; slot_ensure_allocated(m, s); }
+    else {
+        int v = slot_victim(lc, layer, 0);
+        if (v < 0 || lc->slots[v].prot) { pthread_mutex_unlock(&g_pilot_mx); return; }
+        s = &lc->slots[v]; s->pinned = 0;
+        if (vkt_ram_first(layer, s->eid)) vkt_ram_gave();
+    }
+    cache_hide(m, layer, s); s->used = ++m->clock;
+    if (m->loading) m->loading[gidx] = 1;
+    pthread_mutex_unlock(&g_pilot_mx);
+    double t0 = now_s();
+    load_expert_merged(m, layer, eid, s);
+    double dt = now_s() - t0;
+    pthread_mutex_lock(&g_pilot_mx);
+    m->t_disk += dt;
+    cache_publish(m, layer, s, eid); s->pinned = m->is_pinned[gidx]; s->used = ++m->clock;
+    if (m->loading) m->loading[gidx] = 0;
+    pthread_cond_broadcast(&g_pub_cv);
+    pthread_mutex_unlock(&g_pilot_mx);
+}
+
 /* The resident slot of an expert, held, or NULL: never reads. Counts a hit as
  * expert_fetch does; the miss is counted by whoever then reads it. */
 static Slot *expert_try_hold(Model *m, int layer, int eid) {
@@ -4905,7 +4999,7 @@ static int expert_resident(Model *m, int layer, int eid) {
  * expert_fetch, so the cache, the eviction rule and the hit counters are the same), and
  * computes the residents while the drive works. Q36_IO_THREADS=0 restores the serial
  * reads. The bits of every expert output and of the rank-order sum are unchanged. */
-typedef struct { Model *m; int layer, eid, hold; Slot *slot; int done; } Q36IoJob;
+typedef struct { Model *m; int layer, eid, hold; Slot *slot; int done; } Q36IoJob;   /* hold 2: expert_prefetch_spec */
 #define Q36_IO_QMAX 1024
 static pthread_mutex_t g_io_mx = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t g_io_cv = PTHREAD_COND_INITIALIZER;        /* work queued */
@@ -4921,7 +5015,9 @@ static void *q36_io_worker(void *arg) {
         while (g_io_head == g_io_tail) pthread_cond_wait(&g_io_cv, &g_io_mx);
         Q36IoJob *j = g_io_q[g_io_head % Q36_IO_QMAX]; g_io_head++;
         pthread_mutex_unlock(&g_io_mx);
-        Slot *s; expert_fetch(j->m, j->layer, j->eid, &s, j->hold);
+        Slot *s = NULL;
+        if (j->hold == 2) expert_prefetch_spec(j->m, j->layer, j->eid);
+        else expert_fetch(j->m, j->layer, j->eid, &s, j->hold);
         pthread_mutex_lock(&g_io_mx);
         j->slot = s; j->done = 1;
         pthread_cond_broadcast(&g_io_done_cv);
@@ -4950,15 +5046,23 @@ static int q36_io_threads(void) {
     pthread_mutex_unlock(&g_io_mx);
     return g_io_n;
 }
-static void q36_io_submit(Q36IoJob *jobs, int n) {
+static void q36_io_submit_ex(Q36IoJob *jobs, int n, int front) {
     pthread_mutex_lock(&g_io_mx);
     for (int i = 0; i < n; i++) {
         while (g_io_tail - g_io_head >= Q36_IO_QMAX) pthread_cond_wait(&g_io_done_cv, &g_io_mx);
         jobs[i].done = 0; jobs[i].slot = NULL;
-        g_io_q[g_io_tail % Q36_IO_QMAX] = &jobs[i]; g_io_tail++;
+        if (front) { g_io_head--; g_io_q[g_io_head % Q36_IO_QMAX] = &jobs[i]; }   /* a read the engine waits for passes the lookahead's */
+        else { g_io_q[g_io_tail % Q36_IO_QMAX] = &jobs[i]; g_io_tail++; }
     }
     pthread_cond_broadcast(&g_io_cv);
     pthread_mutex_unlock(&g_io_mx);
+}
+static void q36_io_submit(Q36IoJob *jobs, int n) { q36_io_submit_ex(jobs, n, 0); }
+static unsigned q36_io_queued(void) {
+    pthread_mutex_lock(&g_io_mx);
+    unsigned q = g_io_tail - g_io_head;
+    pthread_mutex_unlock(&g_io_mx);
+    return q;
 }
 static void q36_io_wait(Q36IoJob *jobs, int n) {
     pthread_mutex_lock(&g_io_mx);
@@ -4976,7 +5080,7 @@ static int q36_hold_begin(Model *m, int layer, const int *ids, int n, Slot **hel
         jobs[nj].m = m; jobs[nj].layer = layer; jobs[nj].eid = ids[u]; jobs[nj].hold = 1; jmap[nj] = u; nj++;
     }
     if (!nj) return 0;
-    if (q36_io_threads() > 0) q36_io_submit(jobs, nj);
+    if (q36_io_threads() > 0) q36_io_submit_ex(jobs, nj, 1);
     else { for (int j = 0; j < nj; j++) { held[jmap[j]] = expert_hold(m, layer, jobs[j].eid); jobs[j].done = 1; jobs[j].slot = held[jmap[j]]; } }
     return nj;
 }
@@ -4999,6 +5103,82 @@ static void q36_prefetch_ids(Model *m, int layer, const int *ids, int n) {
     int nj = q36_hold_begin(m, layer, uid, nu, held, jobs, jmap);
     q36_hold_finish(held, jobs, jmap, nj);
     for (int u = 0; u < nu; u++) if (held[u]) slot_release(held[u]);
+}
+
+/* ---- Q36_LOOKAHEAD=<depth>: the next layers' experts read while this one computes -------
+ * The residual changes little from one layer to the next, so layer i+1's router applied to
+ * layer i's MoE input (re-weighted from i's post-attention norm to i+1's) names most of the
+ * experts i+1 will route to. Their misses go to the loaders behind every demand read, while
+ * layer i's experts compute and the GPU runs layer i+1's attention or DeltaNet. A wrong
+ * guess costs a read and a probation slot, never a different output. */
+static int g_la_depth = -1, g_la_extra = 4;
+#define Q36_LA_RING 128
+static Q36IoJob g_la_jobs[Q36_LA_RING];
+static uint8_t g_la_used[Q36_LA_RING];
+static unsigned g_la_next;
+static int q36_la_depth(void) {
+    if (g_la_depth < 0) {
+        const char *e = getenv("Q36_LOOKAHEAD"), *x = getenv("Q36_LOOKAHEAD_EXTRA");
+        int d = e && *e ? atoi(e) : 0;
+        g_la_depth = d < 0 ? 0 : d > 3 ? 3 : d;
+        int k = x && *x ? atoi(x) : 4;
+        g_la_extra = k < 0 ? 0 : k > 24 ? 24 : k;
+        if (g_la_depth) fprintf(stderr, "[qwen36] Q36_LOOKAHEAD=%d: the next layers' likely experts (top-k + %d) read ahead\n", g_la_depth, g_la_extra);
+    }
+    return g_la_depth;
+}
+/* layer's router logits on the CPU; 0 where that would mean a device call mid-frame */
+static int q36_router_host(Model *m, int layer, const float *x, float *lg) {
+    const QW *w = &m->L[layer].gate; const Cfg *c = &m->c;
+    if (w->q && w->sc && !w->q8r16) { matmul_q(lg, x, w->q, w->sc, c->hidden, c->n_experts); return 1; }
+#ifdef COLI_VULKAN
+    if (g_vk_ready) return 0;
+#endif
+    if (!w->q && !w->w && !w->q4 && !w->h && !w->gq) return 0;
+    matmul_d(lg, x, (QW *)w, 1, c->hidden, c->n_experts);
+    return 1;
+}
+static void q36_lookahead(Model *m, int layer, const float *x) {
+    const int depth = q36_la_depth();
+    if (depth <= 0) return;
+    const Cfg *c = &m->c; const int D = c->hidden, E = c->n_experts, K = c->topk;
+    if (c->muse || c->router_sigmoid || (c->n_group > 1 && c->n_group <= E) || q36_eh(c) != D || !m->L[layer].post_ln) return;
+    if (q36_io_threads() <= 0 || q36_io_queued() > 16) return;
+    static float *xs, *lg;   /* the engine thread's */
+    if (!xs) { xs = falloc(D); lg = falloc(E); }
+    const float *wi = m->L[layer].post_ln;
+    for (int dd = 1; dd <= depth; dd++) {
+        const int nl = layer + dd;
+        if (nl >= c->n_layers) break;
+        if (q36_dense_l(c, nl) || !m->cache[nl].slots || !m->L[nl].post_ln) continue;
+        const float *wn = m->L[nl].post_ln;
+        for (int d = 0; d < D; d++) { float a = 1.f + wi[d]; xs[d] = fabsf(a) > 1e-3f ? x[d] * ((1.f + wn[d]) / a) : x[d]; }
+        if (!q36_router_host(m, nl, xs, lg)) return;
+        if (c->has_bias && m->L[nl].gate_bias) for (int e = 0; e < E; e++) lg[e] += m->L[nl].gate_bias[e];
+        int want = K + g_la_extra; if (want > 32) want = 32; if (want > E) want = E;
+        int ids[32]; float best[32]; int n = 0;
+        for (int e = 0; e < E; e++) {
+            float v = lg[e];
+            if (n == want && !(v > best[n - 1])) continue;
+            int p = n < want ? n++ : n - 1;
+            while (p > 0 && best[p - 1] < v) { best[p] = best[p - 1]; ids[p] = ids[p - 1]; p--; }
+            best[p] = v; ids[p] = e;
+        }
+        for (int k = 0; k < n; k++) {
+            const int64_t gidx = (int64_t)nl * E + ids[k];
+            pthread_mutex_lock(&g_pilot_mx);
+            int have = slot_indexed(m, nl, ids[k]) != NULL || (m->loading && m->loading[gidx]);
+            pthread_mutex_unlock(&g_pilot_mx);
+            if (have) continue;
+            const unsigned r = g_la_next % Q36_LA_RING;
+            Q36IoJob *j = &g_la_jobs[r];
+            if (g_la_used[r] && !__atomic_load_n(&j->done, __ATOMIC_ACQUIRE)) return;   /* every ring entry still in flight */
+            g_la_used[r] = 1; g_la_next++;
+            j->m = m; j->layer = nl; j->eid = ids[k]; j->hold = 2;
+            q36_io_submit(j, 1);
+            g_la_sent++;
+        }
+    }
 }
 
 /* Q36_SKIP_MISS=<w> (lossy, off by default): on a decode or verify step, a routed expert
@@ -5102,15 +5282,11 @@ static void *q36_heat_warm(void *arg) {
             if (lc->n >= lim || slot_indexed(m, it[i].l, it[i].e) ||
                 (m->loading && m->loading[(int64_t)it[i].l * E + it[i].e])) want = 0;
             pthread_mutex_unlock(&g_pilot_mx);
-            if (want) { jobs[nj].m = m; jobs[nj].layer = it[i].l; jobs[nj].eid = it[i].e; jobs[nj].hold = 0; nj++; }
+            if (want) { jobs[nj].m = m; jobs[nj].layer = it[i].l; jobs[nj].eid = it[i].e; jobs[nj].hold = 2; nj++; }
         }
         if (nj == 8 || (i == n && nj)) {   /* eight in flight: the demand reads queue behind at most these */
-            /* never held: a prefill run may need every slot of the layer it is filling */
             if (q36_io_threads() > 0) { q36_io_submit(jobs, nj); q36_io_wait(jobs, nj); }
-            else for (int j = 0; j < nj; j++) expert_get(m, jobs[j].layer, jobs[j].eid, &jobs[j].slot);
-            pthread_mutex_lock(&g_pilot_mx);
-            m->miss -= (uint64_t)nj < m->miss ? (uint64_t)nj : m->miss;   /* a warm read is not a decode miss */
-            pthread_mutex_unlock(&g_pilot_mx);
+            else for (int j = 0; j < nj; j++) expert_prefetch_spec(m, jobs[j].layer, jobs[j].eid);
             loaded += nj; nj = 0;
         }
     }
@@ -5154,6 +5330,125 @@ static void q36_heat_start(Model *m, const char *snap) {
     const char *w = getenv("Q36_HEAT_WAIT");
     if (w && *w == '1') { q36_heat_warm(m); return; }
     if (pthread_create(&t, NULL, q36_heat_thread, m) == 0) pthread_detach(t);
+}
+
+typedef struct { char magic[8]; uint32_t ver, L, E, H, I, gs, complete; uint64_t slot, stride, fp; } Q36XpHdr;
+/* what the pack was made from: the shape, every shard's size, the first and last expert's place */
+static uint64_t q36_xpack_fp(Model *m) {
+    const Cfg *c = &m->c; uint64_t h = 1469598103934665603ull;
+#define Q36_MIX(v) do { uint64_t mv_ = (uint64_t)(v); for (int b_ = 0; b_ < 8; b_++) { h ^= (mv_ >> (8 * b_)) & 0xff; h *= 1099511628211ull; } } while (0)
+    Q36_MIX(c->n_layers); Q36_MIX(c->n_experts); Q36_MIX(q36_eh(c)); Q36_MIX(c->inter); Q36_MIX(c->expert_gs);
+    for (int i = 0; i < m->S.nfd; i++) Q36_MIX(m->S.sizes[i]);
+    const int lid[2] = { m->active_of[0], m->active_of[c->n_layers - 1] }, eid[2] = { 0, c->n_experts - 1 };
+    for (int k = 0; k < 2; k++) {
+        char nm[256]; snprintf(nm, sizeof nm, "model.layers.%d.mlp.experts.%d.merged_weight", lid[k], eid[k]);
+        st_tensor *t = st_find(&m->S, nm);
+        if (t) { Q36_MIX(t->off); Q36_MIX(t->nbytes); }
+    }
+#undef Q36_MIX
+    return h;
+}
+static int64_t q36_file_size(const char *path) {
+#ifdef _WIN32
+    struct _stat64 sb; return _stat64(path, &sb) == 0 ? (int64_t)sb.st_size : -1;
+#else
+    struct stat sb; return stat(path, &sb) == 0 ? (int64_t)sb.st_size : -1;
+#endif
+}
+static int q36_xpack_build(Model *m, const char *path, const Q36XpHdr *want) {
+    const Cfg *c = &m->c; const int64_t total = (int64_t)c->n_layers * c->n_experts;
+    char tmp[2200]; snprintf(tmp, sizeof tmp, "%s.part", path);
+    FILE *f = fopen(tmp, "wb");
+    if (!f) { perror(tmp); return 0; }
+    uint8_t *hdr = calloc(1, Q36_XP_HDR), *zero = calloc(1, (size_t)want->stride);
+    enum { B = 32 };
+    Slot *t = calloc(B, sizeof(Slot));
+    if (!hdr || !zero || !t) { fprintf(stderr, "OOM building the expert pack\n"); exit(1); }
+    for (int j = 0; j < B; j++) slot_ensure_allocated(m, &t[j]);
+    Q36XpHdr h = *want; h.complete = 0;
+    memcpy(hdr, &h, sizeof h);
+    int ok = fwrite(hdr, 1, Q36_XP_HDR, f) == Q36_XP_HDR, said = -1;
+    const size_t pad = (size_t)(want->stride - want->slot);
+    double t0 = now_s();
+    fprintf(stderr, "[qwen36] Q36_XPACK: building %s (%.1f GB, once; the container is read whole)\n",
+            path, (double)total * want->stride / 1e9);
+    for (int64_t base = 0; base < total && ok; base += B) {
+        const int n = total - base < B ? (int)(total - base) : B;
+        #pragma omp parallel for schedule(dynamic, 1)
+        for (int j = 0; j < n; j++) {
+            const int l = (int)((base + j) / c->n_experts), e = (int)((base + j) % c->n_experts);
+            if (!q36_dense_l(c, l)) load_expert_merged(m, l, e, &t[j]);
+        }
+        for (int j = 0; j < n && ok; j++) {
+            const int l = (int)((base + j) / c->n_experts);
+            ok = fwrite(q36_dense_l(c, l) ? zero : t[j].pw, 1, (size_t)want->slot, f) == (size_t)want->slot &&
+                 (!pad || fwrite(zero, 1, pad, f) == pad);
+        }
+        int pct = (int)(100 * (base + n) / total);
+        if (pct / 10 != said) { said = pct / 10; fprintf(stderr, "[qwen36] Q36_XPACK: %d%% (%.0f s)\n", pct, now_s() - t0); }
+    }
+    if (ok) { h.complete = 1; memcpy(hdr, &h, sizeof h); ok = fseek(f, 0, SEEK_SET) == 0 && fwrite(hdr, 1, Q36_XP_HDR, f) == Q36_XP_HDR; }
+    if (fclose(f) != 0) ok = 0;
+    if (ok) { remove(path); ok = rename(tmp, path) == 0; }
+    if (!ok) { fprintf(stderr, "[qwen36] Q36_XPACK: writing %s failed (disk full?); the container stays the source\n", tmp); remove(tmp); }
+    for (int j = 0; j < B; j++) q36_pw_free(t[j].pw);
+    free(t); free(hdr); free(zero);
+    if (ok) fprintf(stderr, "[qwen36] Q36_XPACK: built in %.0f s\n", now_s() - t0);
+    return ok;
+}
+/* main(), after the tiers and before anything reads an expert in earnest */
+static void q36_xpack_start(Model *m, const char *snap) {
+    const char *e = getenv("Q36_XPACK");
+    if (!e || !*e || *e == '0') return;
+    const Cfg *c = &m->c;
+    if (g_gguf || c->n_experts <= 0 || qq_active() || !xf_mode(m) || !xf_r16(m) || g_expert_mixed) {
+        fprintf(stderr, "[qwen36] Q36_XPACK: only for int4 gs64 experts held in xf16 groups (the CPU and Vulkan paths); off\n");
+        return;
+    }
+    char path[2100];
+    if (!strcmp(e, "1")) snprintf(path, sizeof path, "%s/experts.q36x", snap);
+    else snprintf(path, sizeof path, "%s", e);
+    const int64_t ng = (int64_t)c->inter * q36_eh(c);
+    Q36XpHdr want; memset(&want, 0, sizeof want);
+    memcpy(want.magic, "Q36XPAK1", 8);
+    want.ver = 1; want.L = (uint32_t)c->n_layers; want.E = (uint32_t)c->n_experts; want.H = (uint32_t)q36_eh(c);
+    want.I = (uint32_t)c->inter; want.gs = (uint32_t)c->expert_gs; want.complete = 1;
+    want.slot = (uint64_t)(3 * ng / 2) + (uint64_t)(2 * scale_count_gu(c) + scale_count_d(c)) * sizeof(float);
+    want.stride = (want.slot + 4095) & ~(uint64_t)4095;
+    want.fp = q36_xpack_fp(m);
+    Q36XpHdr got; memset(&got, 0, sizeof got);
+    FILE *f = fopen(path, "rb");
+    int valid = f && fread(&got, sizeof got, 1, f) == 1 && !memcmp(&got, &want, sizeof got) &&
+                q36_file_size(path) >= (int64_t)Q36_XP_HDR + (int64_t)want.L * want.E * (int64_t)want.stride;
+    if (f) fclose(f);
+    if (!valid) {
+        const char *b = getenv("Q36_XPACK_BUILD");
+        if (!(b && *b == '1')) {
+            fprintf(stderr, "[qwen36] Q36_XPACK: %s %s; Q36_XPACK_BUILD=1 builds it (%.1f GB)\n", path,
+                    f ? "was made from another container or is incomplete" : "does not exist",
+                    (double)want.L * want.E * want.stride / 1e9);
+            return;
+        }
+        if (!q36_xpack_build(m, path, &want)) return;
+    }
+#if defined(_WIN32) || defined(__APPLE__)
+    int fd = compat_open_direct(path);
+#elif defined(O_DIRECT)
+    int fd = open(path, O_RDONLY | O_DIRECT);
+#else
+    int fd = -1;
+#endif
+    const int direct = fd >= 0;
+    if (fd < 0) fd = open(path, COMPAT_O_RDONLY);
+    if (fd < 0) { perror(path); return; }
+    const char *p = getenv("Q36_XPACK_PARTS");
+    g_xp_parts = p && *p ? atoi(p) : 4;
+    if (g_xp_parts < 1) g_xp_parts = 1;
+    if (g_xp_parts > 16) g_xp_parts = 16;
+    g_xp_stride = (int64_t)want.stride;
+    __atomic_store_n(&g_xp_fd, fd, __ATOMIC_RELEASE);
+    fprintf(stderr, "[qwen36] Q36_XPACK: experts from %s (%s, one read of %.2f MB in %d parts a miss)\n",
+            path, direct ? "unbuffered" : "buffered", want.stride / 1e6, g_xp_parts);
 }
 
 static void pin_hot_experts(Model *m) {
@@ -5603,6 +5898,7 @@ static void moe_xf_run(Model *m, int layer, const float *x, int S, float *out, c
                 pu[i] = u;
             }
             int nj = q36_hold_begin(m, layer, uid, nu, uslot, jobs, jmap);
+            if (s0 == 0 && S <= 8) q36_lookahead(m, layer, x);
             const int split = ctb && nj > 0 && nj < nu && np <= ovl_max;   /* residents now, while the misses read */
             if (split) {
                 for (int i = 0; i < np; i++) if (pu[i] >= 0 && uslot[pu[i]]) { ex[i] = xf_slot_expert(m, uslot[pu[i]]); exp[i] = &ex[i]; }
@@ -9669,7 +9965,7 @@ static void tier_warmstart(Model *m, int expert_is_int4) {
                 tier_src(m, wpl[i], &tmp, expert_is_int4, &wg, &wu, &wd);
                 qt_note_planned(wpl[i], wpe[i], wg, wu, wd, tmp.gs, tmp.us, tmp.ds);
             }
-            free(tmp.pw); free(tmp.g); free(tmp.gs); free(tmp.g4); free(tmp.u4); free(tmp.d4);
+            q36_pw_free(tmp.pw); free(tmp.g); free(tmp.gs); free(tmp.g4); free(tmp.u4); free(tmp.d4);
             free(tmp.gqe); free(tmp.t8);
         }
         qt_fill_wait();
@@ -9988,7 +10284,7 @@ static void vk_tier_start(Model *m, const char *snap, int cap, int expert_is_int
             load_expert_merged(m, pl[i], pe[i], &tmp);
             VktExpertSrc src = vk_slot_src(m, pl[i], &tmp);
             vkt_put(pl[i], pe[i], &src);
-            free(tmp.pw); free(tmp.g); free(tmp.gs); free(tmp.g4); free(tmp.u4); free(tmp.d4);
+            q36_pw_free(tmp.pw); free(tmp.g); free(tmp.gs); free(tmp.g4); free(tmp.u4); free(tmp.d4);
             free(tmp.gqe); free(tmp.t8); free(tmp.t8s);
         }
         vkt_put_done();
@@ -10603,6 +10899,7 @@ int main(int argc, char **argv) {
 #endif
         if (!dev) q36_trunk_q8_interleave(&m);
     }
+    q36_xpack_start(&m, snap);  /* Q36_XPACK: misses as one unbuffered read of the slot's bytes */
     q36_heat_start(&m, snap);   /* Q36_HEAT: the RAM cache warm from its history */
     /* coli serve mode: speak the gateway wire protocol instead of argv
      * generation. AFTER the tier init: serve sessions ride the VRAM experts

@@ -391,3 +391,35 @@ The next performance opportunity is compiling and loading
 the Vulkan expert tier reports `no expert batch on this device` and routed
 experts stay on the host. A shader compiler such as `glslc` is not currently
 available on this PC.
+
+## Round 3: where the 164 ms of a Vulkan token went, and what changed
+
+From `bench-turbo-12.log` (6.09 tok/s): expert fetch 62.5 ms, expert compute
+32.1 ms, lm_head 22.4 ms on the CPU, about 51 ms in the chain and outside the
+phases. The heat warm-up read experts at 1.25 GB/s with eight loaders.
+
+- **lm_head on the GPU.** The chain left the 486 MiB head on the CPU because
+  1 GiB of VRAM was reserved for an expert tier that cannot start here (no
+  expert shaders). The launcher sets `COLI_VK_TIER_RESERVE_GB=0.5`, so the head
+  fits beside the 40 layers (the lossy run, whose int4 head fit, showed the
+  head at 0.1 ms).
+- **`Q36_XPACK`: experts.q36x.** Every expert stored as its RAM slot holds it
+  (xf16 groups with their scales), 4 KiB aligned. A miss is one unbuffered read
+  straight into the slot, split into 4 reads in flight, instead of two buffered
+  reads plus a CPU repack. One-time build of about 18 GB beside the model.
+- **`Q36_LOOKAHEAD`: next-layer prefetch.** Layer i+1's router is applied to
+  layer i's MoE input, and the predicted experts not in RAM are read while
+  layer i computes and the GPU runs layer i+1. Demand reads go to the front of
+  the loader queue; prefetches never evict a protected expert and are not
+  counted as hits or misses. Routers stay on the host for this (20 MB).
+- `GPU=vk` is the launcher default now.
+
+Run on the target:
+
+```cmd
+git pull
+call c\build-turbo.bat vk
+call benchmark-results\turbo-qwen36.bat xpack
+set N_NEW=128
+call benchmark-results\turbo-qwen36.bat sweep
+```
