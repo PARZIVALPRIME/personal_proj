@@ -1,0 +1,131 @@
+---- vk (exit 0)
+[enc] prompt tokens: 32 | generating 128 new tokens
+[qwen36] expert kernel: planar int4 in RAM (expert_ffn.h), QWEN_EXPERT_KERNEL=0 restores int8 unpack
+[qwen36] cache auto-sized: 128 slots/layer of 256 experts (11.3 GB budget via RAM_GB, 1.9 GB resident, 0.31 GB KV reserved for 16384 positions, 2 MB/slot, floor 8)
+[VK] qwen36 chain: 40 of 40 layers on the device (1.42 GiB), 0 on the CPU (free 3.28 GiB, reserve 512.0 MiB)
+[VK] qwen36: 1.81 GiB of dense host copies now live on the device only: expert cache 128 -> 152 slots a layer
+[VK] tier qwen36: on, NVIDIA GeForce RTX 3050 Laptop GPU, budget 621.7 MiB = 302 experts of 1.7 MiB (fmt 4 gs 64, down fmt 4 gs 64), device memory, own queue, up to 16 promotions per token, balanced against the CPU, streaming cold experts of prompt steps through 64 slots
+[VK] tier qwen36: warm start, 302 experts in 0.6s (302 from the history, 0 more to fill the device)
+[qwen36] Q36_XPACK: experts from D:\colibri-models\qwen36-35b/experts.q36x (unbuffered, one read of 1.77 MB in 4 parts a miss)
+Text : [qwen36] KV cache: float16, 0.02 GiB at 1024 positions (half of float32; Q36_KV=f32 keeps float32)
+[VK] qwen36 chain: prompt chunks of up to 768 rows (389 KiB a row; 0.61 GiB free on the device or in RAM, half of it at most; COLI_VK_CHAIN_ROWS sets it, COLI_VK_CHAIN_ROWS_MAX caps it at 8192)
+TTFT: 1.272 s (time to first token)
+[timers]   lm_head          0.1 ms      0.00 ms/token
+[timers]   step() total: 72.0 ms/token (outside the phases: 37.8)
+[timers]   expert kernel: fetch 12.69 | compute 20.64 ms/token
+[timers] prefill: 61 tokens  dn=0 attn=0 moe=1751(sh=0 rt=0) head=0 ms
+PEAK RSS: 10.45 GB
+Expert cache hit rate: 93.1% (hit=40533 miss=2981)
+Speed: 14.82 tok/s (8.6s for 128 tokens)
+[VK] tier qwen36 run: device 0 of 0 routed experts (0.0%; this run 0 of 0) | CPU RAM hits 40533, disk loads 2981 | resident 302 (budget 302, 617.6 MiB of 621.7 MiB, 3 blocks, frag 0.00) | uploads 302 (453.0 MiB, 302 warm), evictions 0, skipped 0 queue + 0 rate, failed 0 | device 0.0 ms, CPU share 0.0 ms, waited 0.0 ms (0% of device time hidden) | balance: device share 1.00, 0 rows handed to the CPU
+---- long-vk (exit 0)
+[enc] prompt tokens: 5338 | generating 48 new tokens
+[qwen36] expert kernel: planar int4 in RAM (expert_ffn.h), QWEN_EXPERT_KERNEL=0 restores int8 unpack
+[qwen36] cache auto-sized: 130 slots/layer of 256 experts (11.4 GB budget via RAM_GB, 1.9 GB resident, 0.31 GB KV reserved for 16384 positions, 2 MB/slot, floor 8)
+[VK] qwen36 chain: 40 of 40 layers on the device (1.42 GiB), 0 on the CPU (free 3.28 GiB, reserve 512.0 MiB)
+[VK] qwen36: 1.81 GiB of dense host copies now live on the device only: expert cache 130 -> 154 slots a layer
+[VK] tier qwen36: on, NVIDIA GeForce RTX 3050 Laptop GPU, budget 621.7 MiB = 302 experts of 1.7 MiB (fmt 4 gs 64, down fmt 4 gs 64), device memory, own queue, up to 16 promotions per token, balanced against the CPU, streaming cold experts of prompt steps through 64 slots
+[VK] tier qwen36: warm start, 302 experts in 0.6s (302 from the history, 0 more to fill the device)
+[qwen36] Q36_XPACK: experts from D:\colibri-models\qwen36-35b/experts.q36x (unbuffered, one read of 1.77 MB in 4 parts a miss)
+Text : [qwen36] KV cache: float16, 0.11 GiB at 5632 positions (half of float32; Q36_KV=f32 keeps float32)
+[VK] qwen36 chain: prompt chunks of up to 512 rows (389 KiB a row; 0.48 GiB free on the device or in RAM, half of it at most; COLI_VK_CHAIN_ROWS sets it, COLI_VK_CHAIN_ROWS_MAX caps it at 8192)
+[VK] qwen36 chain: a long prompt layer by layer, its experts once a layer over up to 4096 rows (Q36_VK_LAYERWISE=0: chunk by chunk)
+[VK] tier qwen36 stream: a step of 4096 rows; cold experts with 16 rows or more go to the device (the GEMM's 16 rows: the upload and the CPU's rows not measured yet); layer 0: 0 resident, 254 streamed (0 of them copied from the host pool), 2 kept on the CPU (28 rows)
+[qwen36] Q36_PF_EXPERT: a prompt chunk's experts each read once, 77 at a time (Q36_PF_EXPERT=0: row runs)
+TTFT: 25.168 s (time to first token)
+[timers]   lm_head          0.0 ms      0.00 ms/token
+[timers]   step() total: 106.8 ms/token (outside the phases: 52.0)
+[timers]   expert kernel: fetch 32.04 | compute 21.65 ms/token
+[timers] prefill: 5353 tokens  dn=0 attn=0 moe=18623(sh=0 rt=59) head=0 ms
+PEAK RSS: 11.39 GB
+Expert cache hit rate: 67.8% (hit=22261 miss=10559)
+Speed: 1.67 tok/s (28.7s for 48 tokens)
+[VK] tier qwen36 run: device 1669333 of 1708160 routed experts (97.7%; this run 1669333 of 1708160) | CPU RAM hits 22261, disk loads 10559 | resident 302 (budget 302, 617.6 MiB of 621.7 MiB, 3 blocks, frag 0.01) | uploads 366 (549.0 MiB, 302 warm), evictions 64, skipped 0 queue + 0 rate, failed 0 | device 4092.2 ms, CPU share 3830.3 ms, waited 1212.9 ms (70% of device time hidden) | balance: device share 1.00, 0 rows handed to the CPU | stream: 80 steps, 12424 cold experts (20.47 GiB, 4.79 GB/s) and 1315035 rows streamed in 717 sub-batches, prefetched 0 (0 used), 5980 cold experts (38827 rows) kept on the CPU
+---- long-vk-nobatch (exit 0)
+[enc] prompt tokens: 5338 | generating 48 new tokens
+[qwen36] expert kernel: planar int4 in RAM (expert_ffn.h), QWEN_EXPERT_KERNEL=0 restores int8 unpack
+[qwen36] cache auto-sized: 138 slots/layer of 256 experts (12.0 GB budget via RAM_GB, 1.9 GB resident, 0.31 GB KV reserved for 16384 positions, 2 MB/slot, floor 8)
+[VK] qwen36 chain: 40 of 40 layers on the device (1.42 GiB), 0 on the CPU (free 3.28 GiB, reserve 512.0 MiB)
+[VK] qwen36: 1.81 GiB of dense host copies now live on the device only: expert cache 138 -> 162 slots a layer
+[VK] tier qwen36: on, NVIDIA GeForce RTX 3050 Laptop GPU, budget 621.7 MiB = 302 experts of 1.7 MiB (fmt 4 gs 64, down fmt 4 gs 64), device memory, own queue, up to 16 promotions per token, balanced against the CPU, streaming cold experts of prompt steps through 64 slots
+[VK] tier qwen36: warm start, 302 experts in 0.6s (302 from the history, 0 more to fill the device)
+[qwen36] Q36_XPACK: experts from D:\colibri-models\qwen36-35b/experts.q36x (unbuffered, one read of 1.77 MB in 4 parts a miss)
+Text : [qwen36] KV cache: float16, 0.11 GiB at 5632 positions (half of float32; Q36_KV=f32 keeps float32)
+[VK] qwen36 chain: prompt chunks of up to 512 rows (389 KiB a row; 0.48 GiB free on the device or in RAM, half of it at most; COLI_VK_CHAIN_ROWS sets it, COLI_VK_CHAIN_ROWS_MAX caps it at 8192)
+[VK] qwen36 chain: a long prompt layer by layer, its experts once a layer over up to 4096 rows (Q36_VK_LAYERWISE=0: chunk by chunk)
+[VK] tier qwen36 stream: a step of 4096 rows; cold experts with 16 rows or more go to the device (the GEMM's 16 rows: the upload and the CPU's rows not measured yet); layer 0: 0 resident, 254 streamed (0 of them copied from the host pool), 2 kept on the CPU (28 rows)
+[qwen36] Q36_PF_EXPERT: a prompt chunk's experts each read once, 81 at a time (Q36_PF_EXPERT=0: row runs)
+TTFT: 31.229 s (time to first token)
+[timers]   lm_head          0.0 ms      0.00 ms/token
+[timers]   step() total: 106.4 ms/token (outside the phases: 47.0)
+[timers]   expert kernel: fetch 31.81 | compute 26.29 ms/token
+[timers] prefill: 5346 tokens  dn=0 attn=0 moe=24558(sh=0 rt=81) head=0 ms
+PEAK RSS: 11.42 GB
+Expert cache hit rate: 70.6% (hit=23478 miss=9787)
+Speed: 1.35 tok/s (35.5s for 48 tokens)
+[VK] tier qwen36 run: device 1669344 of 1708160 routed experts (97.7%; this run 1669344 of 1708160) | CPU RAM hits 23478, disk loads 9787 | resident 302 (budget 302, 617.6 MiB of 621.7 MiB, 3 blocks, frag 0.03) | uploads 366 (549.0 MiB, 302 warm), evictions 64, skipped 0 queue + 0 rate, failed 0 | device 4046.6 ms, CPU share 3618.1 ms, waited 1117.7 ms (72% of device time hidden) | balance: device share 1.00, 0 rows handed to the CPU | stream: 80 steps, 12425 cold experts (20.48 GiB, 4.24 GB/s) and 1314529 rows streamed in 717 sub-batches, prefetched 0 (0 used), 5981 cold experts (38816 rows) kept on the CPU
+---- long-vk-seg8192 (exit 0)
+[enc] prompt tokens: 5338 | generating 48 new tokens
+[qwen36] expert kernel: planar int4 in RAM (expert_ffn.h), QWEN_EXPERT_KERNEL=0 restores int8 unpack
+[qwen36] cache auto-sized: 137 slots/layer of 256 experts (12.0 GB budget via RAM_GB, 1.9 GB resident, 0.31 GB KV reserved for 16384 positions, 2 MB/slot, floor 8)
+[VK] qwen36 chain: 40 of 40 layers on the device (1.42 GiB), 0 on the CPU (free 3.28 GiB, reserve 512.0 MiB)
+[VK] qwen36: 1.81 GiB of dense host copies now live on the device only: expert cache 137 -> 161 slots a layer
+[VK] tier qwen36: on, NVIDIA GeForce RTX 3050 Laptop GPU, budget 621.7 MiB = 302 experts of 1.7 MiB (fmt 4 gs 64, down fmt 4 gs 64), device memory, own queue, up to 16 promotions per token, balanced against the CPU, streaming cold experts of prompt steps through 64 slots
+[VK] tier qwen36: warm start, 302 experts in 0.6s (302 from the history, 0 more to fill the device)
+[qwen36] Q36_XPACK: experts from D:\colibri-models\qwen36-35b/experts.q36x (unbuffered, one read of 1.77 MB in 4 parts a miss)
+Text : [qwen36] KV cache: float16, 0.11 GiB at 5632 positions (half of float32; Q36_KV=f32 keeps float32)
+[VK] qwen36 chain: prompt chunks of up to 512 rows (389 KiB a row; 0.48 GiB free on the device or in RAM, half of it at most; COLI_VK_CHAIN_ROWS sets it, COLI_VK_CHAIN_ROWS_MAX caps it at 8192)
+[VK] qwen36 chain: a long prompt layer by layer, its experts once a layer over up to 8192 rows (Q36_VK_LAYERWISE=0: chunk by chunk)
+[VK] tier qwen36 stream: a step of 5338 rows; cold experts with 16 rows or more go to the device (the GEMM's 16 rows: the upload and the CPU's rows not measured yet); layer 0: 0 resident, 255 streamed (0 of them copied from the host pool), 1 kept on the CPU (13 rows)
+[qwen36] Q36_PF_EXPERT: a prompt chunk's experts each read once, 80 at a time (Q36_PF_EXPERT=0: row runs)
+TTFT: 21.380 s (time to first token)
+[timers]   lm_head          0.1 ms      0.00 ms/token
+[timers]   step() total: 93.1 ms/token (outside the phases: 34.4)
+[timers]   expert kernel: fetch 27.12 | compute 30.08 ms/token
+[timers] prefill: 5340 tokens  dn=0 attn=0 moe=13809(sh=0 rt=85) head=0 ms
+PEAK RSS: 11.39 GB
+Expert cache hit rate: 77.1% (hit=19231 miss=5697)
+Speed: 1.87 tok/s (25.7s for 48 tokens)
+[VK] tier qwen36 run: device 1697230 of 1708160 routed experts (99.4%; this run 1697230 of 1708160) | CPU RAM hits 19231, disk loads 5697 | resident 302 (budget 302, 617.6 MiB of 621.7 MiB, 3 blocks, frag 0.58) | uploads 318 (477.0 MiB, 302 warm), evictions 16, skipped 0 queue + 0 rate, failed 0 | device 4067.6 ms, CPU share 1422.9 ms, waited 2008.7 ms (51% of device time hidden) | balance: device share 1.00, 0 rows handed to the CPU | stream: 40 steps, 8048 cold experts (13.26 GiB, 4.45 GB/s) and 1291549 rows streamed in 692 sub-batches, prefetched 0 (0 used), 1647 cold experts (10930 rows) kept on the CPU, 1 steps summed on the device
+---- long-vk-io16 (exit 0)
+[enc] prompt tokens: 5338 | generating 48 new tokens
+[qwen36] expert kernel: planar int4 in RAM (expert_ffn.h), QWEN_EXPERT_KERNEL=0 restores int8 unpack
+[qwen36] cache auto-sized: 139 slots/layer of 256 experts (12.1 GB budget via RAM_GB, 1.9 GB resident, 0.31 GB KV reserved for 16384 positions, 2 MB/slot, floor 8)
+[VK] qwen36 chain: 40 of 40 layers on the device (1.42 GiB), 0 on the CPU (free 3.28 GiB, reserve 512.0 MiB)
+[VK] qwen36: 1.81 GiB of dense host copies now live on the device only: expert cache 139 -> 163 slots a layer
+[VK] tier qwen36: on, NVIDIA GeForce RTX 3050 Laptop GPU, budget 621.7 MiB = 302 experts of 1.7 MiB (fmt 4 gs 64, down fmt 4 gs 64), device memory, own queue, up to 16 promotions per token, balanced against the CPU, streaming cold experts of prompt steps through 64 slots
+[VK] tier qwen36: warm start, 302 experts in 0.6s (302 from the history, 0 more to fill the device)
+[qwen36] Q36_XPACK: experts from D:\colibri-models\qwen36-35b/experts.q36x (unbuffered, one read of 1.77 MB in 4 parts a miss)
+Text : [qwen36] KV cache: float16, 0.11 GiB at 5632 positions (half of float32; Q36_KV=f32 keeps float32)
+[VK] qwen36 chain: prompt chunks of up to 512 rows (389 KiB a row; 0.48 GiB free on the device or in RAM, half of it at most; COLI_VK_CHAIN_ROWS sets it, COLI_VK_CHAIN_ROWS_MAX caps it at 8192)
+[VK] qwen36 chain: a long prompt layer by layer, its experts once a layer over up to 4096 rows (Q36_VK_LAYERWISE=0: chunk by chunk)
+[VK] tier qwen36 stream: a step of 4096 rows; cold experts with 16 rows or more go to the device (the GEMM's 16 rows: the upload and the CPU's rows not measured yet); layer 0: 0 resident, 254 streamed (0 of them copied from the host pool), 2 kept on the CPU (28 rows)
+[qwen36] Q36_PF_EXPERT: a prompt chunk's experts each read once, 81 at a time (Q36_PF_EXPERT=0: row runs)
+TTFT: 27.038 s (time to first token)
+[timers]   lm_head          0.0 ms      0.00 ms/token
+[timers]   step() total: 124.7 ms/token (outside the phases: 60.6)
+[timers]   expert kernel: fetch 35.92 | compute 26.81 ms/token
+[timers] prefill: 5353 tokens  dn=0 attn=0 moe=20495(sh=0 rt=94) head=0 ms
+PEAK RSS: 11.45 GB
+Expert cache hit rate: 70.5% (hit=23173 miss=9675)
+Speed: 1.54 tok/s (31.2s for 48 tokens)
+[VK] tier qwen36 run: device 1669188 of 1708160 routed experts (97.7%; this run 1669188 of 1708160) | CPU RAM hits 23173, disk loads 9675 | resident 302 (budget 302, 617.6 MiB of 621.7 MiB, 3 blocks, frag 0.58) | uploads 366 (549.0 MiB, 302 warm), evictions 64, skipped 0 queue + 0 rate, failed 0 | device 4036.3 ms, CPU share 3806.7 ms, waited 985.6 ms (76% of device time hidden) | balance: device share 1.00, 0 rows handed to the CPU | stream: 80 steps, 12412 cold experts (20.45 GiB, 4.25 GB/s) and 1311451 rows streamed in 720 sub-batches, prefetched 0 (0 used), 6014 cold experts (38972 rows) kept on the CPU
+---- long-vk-cpu (exit 0)
+[enc] prompt tokens: 5338 | generating 48 new tokens
+[qwen36] expert kernel: planar int4 in RAM (expert_ffn.h), QWEN_EXPERT_KERNEL=0 restores int8 unpack
+[qwen36] cache auto-sized: 141 slots/layer of 256 experts (12.2 GB budget via RAM_GB, 1.9 GB resident, 0.31 GB KV reserved for 16384 positions, 2 MB/slot, floor 8)
+[VK] qwen36 chain: 40 of 40 layers on the device (1.42 GiB), 0 on the CPU (free 3.28 GiB, reserve 512.0 MiB)
+[VK] qwen36: 1.81 GiB of dense host copies now live on the device only: expert cache 141 -> 165 slots a layer
+[qwen36] Q36_XPACK: experts from D:\colibri-models\qwen36-35b/experts.q36x (unbuffered, one read of 1.77 MB in 4 parts a miss)
+Text : [qwen36] KV cache: float16, 0.11 GiB at 5632 positions (half of float32; Q36_KV=f32 keeps float32)
+[VK] qwen36 chain: prompt chunks of up to 1280 rows (389 KiB a row; 0.99 GiB free on the device or in RAM, half of it at most; COLI_VK_CHAIN_ROWS sets it, COLI_VK_CHAIN_ROWS_MAX caps it at 8192)
+[VK] qwen36 chain: a long prompt layer by layer, its experts once a layer over up to 4096 rows (Q36_VK_LAYERWISE=0: chunk by chunk)
+[qwen36] Q36_PF_EXPERT: a prompt chunk's experts each read once, 82 at a time (Q36_PF_EXPERT=0: row runs)
+TTFT: 43.994 s (time to first token)
+[timers]   lm_head          0.0 ms      0.00 ms/token
+[timers]   step() total: 100.2 ms/token (outside the phases: 54.5)
+[timers]   expert kernel: fetch 23.34 | compute 21.29 ms/token
+[timers] prefill: 5353 tokens  dn=0 attn=0 moe=37189(sh=0 rt=65) head=0 ms
+PEAK RSS: 11.67 GB
+Expert cache hit rate: 74.5% (hit=24821 miss=8513)
+Speed: 1.01 tok/s (47.3s for 48 tokens)
