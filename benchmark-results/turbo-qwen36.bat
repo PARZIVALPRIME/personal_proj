@@ -148,15 +148,13 @@ call :mklong
 set "PROMPT=%HERE%prompt.txt"
 set "LONG=%HERE%prompt-long.txt"
 call :one vk                 
-call :one vk-cpu             "COLI_VK_TIER=0"
-rem a long prompt layer by layer (round 11), the tier taking its experts
+rem a long prompt layer by layer, the tier's cold experts read 16 at a time (round 12)
 call :one long-vk            "PROMPT=%LONG%" "N_NEW=48"
-call :one long-vk-seg4096    "PROMPT=%LONG%" "N_NEW=48" "Q36_VK_LAYERWISE_ROWS=4096" "Q36_PF_ROWS=4096"
-rem layer by layer, every expert on the CPU (its text must match long-vk-cpu-chunks)
+rem the tier's reads one at a time, as in sweep-6 (29.4 s)
+call :one long-vk-nobatch    "PROMPT=%LONG%" "N_NEW=48" "Q36_VK_LOAD_BATCH=0"
+call :one long-vk-seg8192    "PROMPT=%LONG%" "N_NEW=48" "Q36_VK_LAYERWISE_ROWS=8192" "Q36_PF_ROWS=8192"
+call :one long-vk-io16       "PROMPT=%LONG%" "N_NEW=48" "Q36_IO_THREADS=16"
 call :one long-vk-cpu        "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_TIER=0"
-rem chunk by chunk, as before round 11
-call :one long-vk-chunks     "PROMPT=%LONG%" "N_NEW=48" "Q36_VK_LAYERWISE=0"
-call :one long-vk-cpu-chunks "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_TIER=0" "Q36_VK_LAYERWISE=0"
 echo.
 echo ===== %SWEEP%\summary.txt =====
 type "%SWEEP%\summary.txt"

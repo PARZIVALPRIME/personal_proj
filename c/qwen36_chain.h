@@ -1606,7 +1606,7 @@ static int q36c_lm_on(void) {
 /* rows of one MoE call: the tier's step and the CPU's pass hold their outputs (64 KiB a row) */
 static int q36c_lm_seg(void) {
     static int v = -1;
-    if (v < 0) { const char *e = getenv("Q36_VK_LAYERWISE_ROWS"); v = e && atoi(e) > 0 ? atoi(e) : 2048; }
+    if (v < 0) { const char *e = getenv("Q36_VK_LAYERWISE_ROWS"); v = e && atoi(e) > 0 ? atoi(e) : 4096; }
     return v;
 }
 static void q36c_lm_angles(Q36Chain *ch, Model *m, int pb, int n) {

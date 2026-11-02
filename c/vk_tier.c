@@ -1420,7 +1420,14 @@ static int issue_big(int layer, const float *x, int S, int K, const int *idx, co
             if (v->pref) T.pf_used++;
         }
     }
-    for (int e = 0; e < E; e++) if (cls[e] == BC_STREAM && eslot[e] < 0) order[no++] = e;
+    /* the cold ones the engine holds in RAM first: in id order, a step's misses evicted the
+     * experts its later loads (and the prompt's next step at this layer) read again */
+    for (int pass = 0; pass < 2; pass++)
+        for (int e = 0; e < E; e++) {
+            if (cls[e] != BC_STREAM || eslot[e] >= 0) continue;
+            const int ram = T.c.in_ram ? T.c.in_ram(T.c.ram_ctx, layer, e) != 0 : 1;
+            if (ram == (pass == 0)) order[no++] = e;
+        }
     /* the second device's batch first, so it runs beside every sub-batch */
     int d2_taken = nd2 ? d2_issue_big(layer, x, K, w, cnt, ofs, cls, taken) : 0;
     /* sub-batches */

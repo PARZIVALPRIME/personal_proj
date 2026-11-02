@@ -5868,7 +5868,7 @@ static int q36_pf_expert_on(void) {
 /* rows a pass: their S*K outputs live at once, 64 KiB a row on the 35B */
 static int q36_pf_rows(void) {
     static int v;
-    if (!v) { const char *e = getenv("Q36_PF_ROWS"); int n = e && *e ? atoi(e) : 2048; v = n < 64 ? 64 : n > 8192 ? 8192 : n; }
+    if (!v) { const char *e = getenv("Q36_PF_ROWS"); int n = e && *e ? atoi(e) : 4096; v = n < 64 ? 64 : n > 8192 ? 8192 : n; }
     return v;
 }
 #define Q36_PF_CALL 2048   /* (row, expert) pairs a kernel call */
@@ -10323,6 +10323,44 @@ static int vk_load(void *ctx, int layer, int e, VktExpertSrc *src, void **h) {
     return 1;
 }
 static void vk_release(void *ctx, void *h) { (void)ctx; slot_release((Slot *)h); }
+/* The tier's streaming, n experts at once: the misses read by the loaders together
+ * (Q36_IO_THREADS; one at a time through vk_load, the drive saw a queue of one), the
+ * xf16 groups unpacked in parallel, each into its own buffer (vk_slot_src's is one a thread) */
+#define Q36_VKB_MAX 16
+static uint8_t *g_vkb[Q36_VKB_MAX]; static float *g_vkbs[Q36_VKB_MAX];
+static int vk_load_batch(void *ctx, int layer, const int *eids, int n, VktExpertSrc *srcs, void **h) {
+    Model *m = ctx;
+    static int on = -1;
+    if (on < 0) { const char *e = getenv("Q36_VK_LOAD_BATCH"); on = !(e && *e == '0'); }
+    if (!on || !xf_mode(m) || g_gguf || q36_io_threads() <= 0) return 0;
+    if (n > Q36_VKB_MAX) n = Q36_VKB_MAX;
+    if (n > m->cache[layer].cap / 2) n = m->cache[layer].cap / 2;
+    if (n < 2) return 0;
+    const int r16 = xf_r16(m), H = q36_eh(&m->c), I = m->c.inter;
+    const int64_t gp = (int64_t)I * H / 2, scu = scale_count_gu(&m->c), nsc = 2 * scu + scale_count_d(&m->c);
+    for (int i = 0; r16 && i < n; i++)
+        if ((!g_vkb[i] && !(g_vkb[i] = malloc((size_t)(3 * gp)))) || (!g_vkbs[i] && !(g_vkbs[i] = malloc((size_t)nsc * sizeof(float))))) return 0;
+    Slot *held[Q36_VKB_MAX]; Q36IoJob jobs[Q36_VKB_MAX]; int jmap[Q36_VKB_MAX];
+    q36_hold_finish(held, jobs, jmap, q36_hold_begin(m, layer, eids, n, held, jobs, jmap));
+    for (int i = 0; i < n; i++)
+        if (!held[i]) { for (int j = 0; j < n; j++) if (held[j]) slot_release(held[j]); return 0; }
+    if (r16) {
+        const size_t gu = (size_t)(I / 16) * xf16_group_bytes(H);
+        #pragma omp parallel for schedule(dynamic, 1)
+        for (int i = 0; i < n; i++) {
+            uint8_t *b = g_vkb[i]; float *bs = g_vkbs[i]; const uint8_t *pw = held[i]->pw;
+            xf16_unpack(b, bs, pw, I, H);
+            xf16_unpack(b + gp, bs + scu, pw + gu, I, H);
+            xf16_unpack(b + 2 * gp, bs + 2 * scu, pw + 2 * gu, H, I);
+        }
+    }
+    for (int i = 0; i < n; i++) {
+        srcs[i] = r16 ? (VktExpertSrc){g_vkb[i], g_vkb[i] + gp, g_vkb[i] + 2 * gp, g_vkbs[i], g_vkbs[i] + scu, g_vkbs[i] + 2 * scu}
+                      : vk_slot_src(m, layer, held[i]);
+        h[i] = held[i];
+    }
+    return n;
+}
 /* What the serve allocates once the tier is up (VktConfig.ram_later): the KV cache at the
  * served context, a sliding layer's ring (q36_ring_for), for each conversation (KV_SLOTS),
  * and the attention's score rows, one per thread (#2314: a pool sized from the RAM free
@@ -10403,7 +10441,7 @@ static void vk_tier_start(Model *m, const char *snap, int cap, int expert_is_int
                     .dense_bytes = vk_dense_bytes(m), .stage = g_vk_chain,
                     .chain_bytes = g_vk_chain ? q36c_late_bytes(m, qwen36_max_ctx() < Q36C_KV_START ? qwen36_max_ctx() : Q36C_KV_START) : 0,
                     .in_ram = vk_in_ram, .ram_ctx = m,
-                    .load = vk_load, .release = vk_release, .load_ctx = m,
+                    .load = vk_load, .release = vk_release, .load_batch = vk_load_batch, .load_ctx = m,
                     .layer_gate_up = lgu, .layer_down = ldn};
     rt_init("qwen36", c->n_layers, c->n_experts);
     rt_drop_row(c->n_layers);   /* no MTP row */
