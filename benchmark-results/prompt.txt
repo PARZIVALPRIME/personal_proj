@@ -1,0 +1,1 @@
+﻿You are a coding benchmark. Write a concise Python function fibonacci(n) that returns the nth Fibonacci number, with a brief explanation. Output code only.

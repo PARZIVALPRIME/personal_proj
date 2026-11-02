@@ -1,0 +1,344 @@
+# Tuning & runtime knobs
+
+Everything here is opt-in; the defaults are chosen so a plain `./coli chat`
+is safe on any machine. See also [SETTINGS.md](SETTINGS.md) and
+[ENVIRONMENT.md](ENVIRONMENT.md) for the full variable inventory.
+
+## The knobs that matter most
+
+| knob | what it does |
+|---|---|
+| `--temp T` | token sampling temperature (default 0.7 + nucleus 0.90 — tuned for int4; 0 = greedy) |
+| `--topp 0.7` | adaptive expert top-p (30–40% less disk; lossy — prints a warning) |
+| `--ngen N` | max tokens per answer (`:more` in chat continues a truncated one); without it a chat server lets an answer run to the end of the context |
+| `--repin N` | adapt RAM/VRAM hot experts every N emitted tokens |
+| `RAM_GB=<n>` | claim more RAM for the expert cache than the conservative auto-detect |
+| `PIN=stats PIN_GB=g` | pin the hottest experts from a measured usage profile |
+| `DRAFT=n` | MTP draft depth (0 disables speculation) |
+| `GRAMMAR=g.gbnf` | grammar-forced drafts for constrained JSON/NDJSON output ([docs](grammar-draft.md)) |
+| `THINK=1` | enable GLM-5.2's reasoning block |
+| `PILOT=1` | router-lookahead disk prefetch (see below) |
+| `URING=1` | Linux-only batched expert I/O (implies `PIPE=1`) |
+| `PIPE=0` | disable the async expert-load pool (default ON — overlaps `pread` with matmul, −18% disk service) |
+| `DIRECT=1` | O_DIRECT expert reads (measured **+65%** alone on a Strix Halo, [#200](https://github.com/JustVugg/colibri/issues/200)) |
+| `COLI_NUMA=1` | interleave resident weights across NUMA nodes on multi-socket hosts ([#82](https://github.com/JustVugg/colibri/issues/82)) |
+| `CACHE_ROUTE=1` | cache-aware max-rank routing (opt-in, [#199](https://github.com/JustVugg/colibri/issues/199)) |
+| `AUTOPIN=0` | disable the learning cache's auto-pin |
+| `CAP_RAISE=0` | don't auto-grow the expert cache |
+| `KVSAVE=0` | disable KV-cache persistence |
+| `TF=1` | teacher-forcing validation |
+
+Automatic history pinning and the adaptive LRU share the same expert RAM
+budget. Colibri caps automatic pinning to preserve the no-pin LRU capacity;
+explicit `PIN` and `PIN_GB` settings remain authoritative.
+
+## Resource policy
+
+`coli plan` reports the planned hot (VRAM), warm (RAM), and cold backing (disk)
+tiers, the reason for each placement, and the expected bottleneck. The default
+`--policy quality` and `--policy balanced` modes preserve checkpoint quantization
+and router decisions unless `--topk` or `--topp` is passed; those explicit lossy
+overrides print a warning and proceed.
+
+The plan also emits a machine-readable `next_actions` list and renders it in
+the terminal. A missing storage measurement is marked `required`; subsequent
+profiling and tuning work is `recommended`. These actions produce the evidence
+needed to improve a plan on this machine—they do not silently enable an
+unmeasured optimization.
+
+Auto-tier plans size OpenMP from physical cores and bind workers across cores.
+Memory-bound quantized kernels can regress sharply when SMT siblings compete for
+limited memory channels. On a hybrid CPU the team is the performance cores only:
+an OpenMP team meets at a barrier after every matmul, so its slowest thread sets the
+pace. That is Apple Silicon's P-cores (`hw.perflevel0`), and on x86 the cores of the
+highest `EfficiencyClass` on Windows or the `cpu_core` PMU's on Linux (Intel's P-cores;
+an i5-13500, 6 P + 8 E cores, decoded Qwen3.8 IQ2_XS on the CPU at 9.40 tok/s on its 6
+P-cores against 9.00 on all 14). The GLM, Kimi K3, and OLMoE engines also apply that
+cap when launched directly; explicit `OMP_NUM_THREADS` and the
+`COLI_NO_OMP_TUNE` kill switch always take precedence.
+
+> Note (#471): exporting `OMP_PROC_BIND`/`OMP_PLACES` used to interact badly with
+> the engine's one-time OpenMP tuning re-exec on Linux — the re-exec'd image
+> inherited the first image's place-0 thread binding and the whole team landed on
+> one core (~20× slowdown). The engine now resets its affinity to all online CPUs
+> right before the re-exec, so explicit `OMP_*` pinning works as documented.
+> `COLI_OMP_TUNED=1` remains the escape hatch that skips the re-exec entirely.
+
+The re-exec binds the team with `OMP_PROC_BIND=close` and `OMP_PLACES=cores`, one place
+per core. Without the places libgomp makes one per hardware thread, and on a CPU that
+numbers a core's SMT siblings side by side (Intel's hybrid CPUs on Linux: CPUs 0 and 1 are
+P-core 0) the team of six P-core threads sat on CPUs 0-5, three cores. On an i5-13500 that
+cost Mistral-Large-4 UD-IQ1_S a quarter of its decode (0.59-0.61 tok/s against 0.76-0.80
+with the places). Both are defaults only: your own `OMP_PROC_BIND`/`OMP_PLACES` win.
+
+The OLMoE, qwen36 (Qwen3.6, LFM3, Flint and the other models it runs) and qwen38 engines take
+the same hot team on Linux and FreeBSD (`coli_omp_hot_team` in `omp_tune.h`): active waiting
+with `GOMP_SPINCOUNT=200000` (a moment of spinning between a token's many small matmul
+regions, then sleep, so a disk wait does not burn a core), `KMP_BLOCKTIME=200`, the team on
+whole cores and of fixed size, set and the engine run again once, keeping its own process
+name. Not on macOS (#707), not with CUDA or Metal on, not under `COLI_NO_OMP_TUNE`. Served on
+an i5-13500, Q4_K_M, alternated with dev:
+
+| on the CPU | decode before | decode after | prompt before | prompt after |
+|---|---|---|---|---|
+| OLMoE | 43.3, 42.7 tok/s | 47.9, 47.6 | 267, 268 | 279, 279 |
+| LFM3-VL-2B | 33.7, 33.8 | 34.5, 34.5 | 282, 280 | 287, 287 |
+| Qwen3.6-35B-A3B (4 rounds) | 13.5-13.6 | 13.9 | 115.7 average | 115.4 average |
+| Qwen3.8-Flash-Next IQ2_XS, 68 GB on 62 GB of RAM (3 rounds) | 7.9-8.1 | 9.0-9.1 | 38.2 average | 36.7 average |
+
+Qwen3.8 reads its experts from the disk there: decode gains, the prompt (212 tokens) loses 4%,
+the cost colibri.c's spin count is the compromise for. On Vulkan decode is unchanged; the prompt is faster for LFM3 (6636 and 6593 to 6961 and 6879
+tok/s), the same for OLMoE, 2% slower for Qwen3.6 (2003 to 1965 on average over 4 rounds).
+
+### Hybrid CUDA/CPU OpenMP override
+
+The main GLM engine intentionally skips its active-wait OpenMP tuning when
+`COLI_CUDA` is set. Active worker teams have measured severe regressions by
+contending with CUDA dispatch and synchronization, so a CUDA model that still
+routes some experts through RAM is not, by itself, a reason to change that
+default.
+
+On a specific hybrid host where profiling shows the CPU expert window on the
+critical path, the supported experiment is an explicit user-owned OpenMP
+policy:
+
+```bash
+OMP_WAIT_POLICY=active GOMP_SPINCOUNT=200000 KMP_BLOCKTIME=200 \
+OMP_PROC_BIND=close OMP_DYNAMIC=FALSE \
+COLI_CUDA=1 ./coli run --model /models/glm52_i4 "Benchmark prompt"
+```
+
+The OpenMP runtime reads these variables before `main()`, so they must be set
+on the engine invocation rather than exported after startup. The engine uses
+`overwrite=0`; explicit values remain authoritative. `GOMP_SPINCOUNT` applies
+to libgomp and `KMP_BLOCKTIME` to Intel/LLVM OpenMP runtimes, so carrying both
+keeps the command portable across common builds.
+
+Treat this as a measured per-host override, not a recommended CUDA default.
+Compare it against the unchanged command with stable page-cache state and an
+interleaved run order; report CPU expert time, GPU critical time, disk wait,
+and end-to-end throughput. Reject it if GPU time grows or the CPU window was
+already hidden behind the GPU. Do not use active waiting on Apple Silicon: CPU
+spin has measured slower there by stealing the shared CPU/GPU power budget.
+`COLI_NO_OMP_TUNE=1` remains the explicit passive-policy kill switch.
+
+```bash
+coli plan --model /models/glm52_i4 --policy quality
+coli run --auto-tier --policy quality "Explain MoE offloading"
+# Explicit research-only router reduction:
+coli run --policy experimental-fast --topk 4 "Benchmark prompt"
+```
+
+## Measured machine profiles
+
+`coli plan` chooses a safe starting point from capacity and topology.
+`coli tune` measures the remaining scheduling choices on the actual model and
+machine, then saves a hardware/model/engine-specific profile:
+
+```bash
+coli tune --model /models/glm52_i4
+coli run --model /models/glm52_i4 --auto-tier "Explain MoE offloading"
+```
+
+GLM generates one calibration continuation and teacher-forces it for every
+candidate. The sibling engines use their common serving protocol instead: one
+engine stays alive for all requests of a candidate, and deterministic prompts
+rotate in a fixed order. That preserves the expert cache and measures a real
+mixed chat instead of repeatedly loading one process or teaching the cache one
+exact prompt. Greedy output is compared per prompt across every candidate; any
+byte drift disqualifies the scheduling change.
+
+The bounded sweep includes execution knobs such as OpenMP thread count, NUMA
+placement, I/O overlap, direct I/O, CUDA pipelining, and DeepSeek V4 expert
+loader lanes. When cold experts remain on disk it also tests 75% and 50% of
+the planner's expert-cache allowance. Dense weights, KV/workspace reservations,
+and the OS reserve are never reduced, and no candidate may exceed the planner's
+safe baseline. GLM/Inkling/OLMoE/Qwen receive the measured slots-per-layer cap;
+V4 receives a whole-process `RAM_GB` ceiling; Kimi receives `K3_EXPERT_GB` under
+its unchanged whole-process ceiling. The sweep never changes weights,
+quantization, router decisions, `TOPK`, `TOPP`, or sampling. Add repeatable
+`--rotate-prompt` options to replace the secondary built-in workload prompt.
+
+A candidate is saved only when median throughput improves by at least 3% while
+expert hit rate remains within 0.5 percentage points and reported TTFT/p99
+latency stay within 20% of the baseline. The winner is then rerun before a final
+baseline; this reverse-order gate gives the baseline any remaining warm-cache
+advantage and rejects startup drift. Otherwise the baseline is recorded and no
+override is applied. Saved profiles are loaded by `--auto-tier`; `--ram`,
+`--cap`, `RAM_GB`, `K3_EXPERT_GB`, and other explicit settings always win. A
+resource winner is rechecked against the current plan at every launch, so a
+profile measured with more free RAM is ignored rather than overcommitted later.
+Use `--no-tune-profile` to bypass a saved profile.
+
+Profiles live under `$XDG_CONFIG_HOME/colibri/tuning` (normally
+`~/.config/colibri/tuning`) or `%LOCALAPPDATA%\colibri\tuning` on Windows. A
+change to the engine binary, model metadata, CPU topology, or GPU inventory
+produces a new fingerprint instead of reusing stale measurements.
+
+Disk is an immutable recovery source, not a normal decode target. If the plan
+leaves cold expert bytes on disk, speed depends on cache hit rate; output quality
+does not.
+
+Cold expert reads can use a deferred pipeline: resident RAM/VRAM experts execute
+while missing experts are loaded in a bounded background I/O pool, then the cold
+results join before the layer completes. The pool engages only under `PIPE=1`;
+`PIPE_WORKERS=n` sets its worker count (default 8). Profiling reports both disk
+service time and the smaller foreground-visible wait time so overlap is explicit.
+
+`--policy balanced` enables lossless live placement (`REPIN=64`). At safe request
+boundaries, a per-layer LFRU score combines decaying session frequency with recent
+access and replaces at most four sufficiently colder pinned experts. `--policy
+quality` leaves live replacement off by default; `REPIN=0` always disables it.
+
+## The learning cache
+
+The engine records which experts your usage actually routes to (`.coli_usage`
+next to the model, updated every turn) and at startup automatically pins the
+hottest ones in spare RAM — colibrì literally gets faster the more you use it.
+`PIN=auto` seeds the pin directly from the live usage history
+([#301](https://github.com/JustVugg/colibri/pull/301)).
+
+**The expert cache auto-sizes to your RAM** (since 2026-07-10): the engine
+*raises* the LRU cap to fill your `--ram` budget instead of only lowering it.
+If you benchmarked colibrì before that date, rerun — your numbers were capped.
+
+**Live tier adaptation** (`--repin N`, opt-in): at safe turn boundaries, a
+decaying session heat map replaces cold pinned experts with hotter streamed
+experts. A 25% hysteresis and a four-swap limit prevent tier thrashing.
+Persistent `.coli_usage` remains the long-term signal and is not decayed.
+
+The history's on-disk format, what happens when one engine is handed another
+engine's history, and how `PIN=<file>` differs from `PIN=auto` in how much it
+trusts a file are documented in
+[routing-telemetry.md](routing-telemetry.md).
+
+### What a pin budget buys (`tools/usage_coverage.py`)
+
+AUTOPIN and the CUDA tier size the pin by how much memory is free. To see what
+that memory buys, read the history's coverage curve: the share of past expert
+selections that the best pinned set of a given size would have served.
+
+```bash
+cd c
+python3 tools/usage_coverage.py <model>/.coli_usage --expert-mb 1.7 --vram-gb 6 --ram-gb 8
+```
+
+It prints how concentrated the routing is (top 1/10/30% of experts, Gini,
+effective number of experts), coverage at a list of budgets, the smallest budget
+for 70/80/90%, the knee where an extra GB starts buying less than average,
+and a VRAM-then-RAM plan in the order `pin_load` fills them (VRAM less
+`--reserve-gb`, default 2 like `CUDA_RESERVE_GB`). `--min-gain G` marks where
+one more GB adds fewer than G points. `--expert-mb` is the size of one routed
+expert; without it budgets are given in percent of experts.
+
+On the shipped Qwen3.6 profile (`profiles/qwen36-35b.coli_usage`, 1.7 MB per
+int4 expert):
+
+| pinned | experts | coverage |
+|---:|---:|---:|
+| 1 GB | 5.7% | 23.4% |
+| 2 GB | 11.5% | 37.4% |
+| 4 GB | 23.0% | 56.6% |
+| 6 GB | 34.5% | 70.2% |
+| 8 GB | 45.9% | 80.5% |
+
+Coverage is measured on the history it was built from, so it overstates what
+the same pin serves on new prompts. `--holdout <files>` scores the ranking on
+other histories: the shipped Qwen3.8 profile covers 70% of its own selections
+with 26% of experts, but the same experts cover 57.7% of a separate Qwen3.8
+session (`docs/experiments/vulkan-qwen38-mtp-2026-10-05/history.usage.gz`).
+Coverage is also a lower bound on the hit rate, since the LRU serves part of
+the rest. Models without hot experts (OLMoE,
+[#864](https://github.com/JustVugg/colibri/issues/864)) show up as a nearly
+straight curve.
+
+## Router-lookahead prefetch (`PILOT=1`, experimental)
+
+GLM-5.2's expert routing is measurably predictable *ahead of time* — applying
+layer L+1's router to layer L's post-attention state recalls **71.6%** of the
+true top-8 (vs 41.3% for "same experts as last token"). `PILOT=1` issues
+next-layer expert readahead from a dedicated I/O thread while the current layer
+computes. `PILOT_REAL=1` moves the prefetched loads off the critical path
+(measured +11pp hit rate on a big-cache host), and `PILOT_TWO=1` folds the
+computed shared-expert into the prediction (+3% recall,
+[#200](https://github.com/JustVugg/colibri/issues/200)). On disk-saturated
+hosts hint-only PILOT can be net negative — measure on yours.
+
+## Speculation and reproducibility
+
+Speculative decoding requires that the draft and verify paths compute the same
+function — `SPEC_PIN=1` (default since [#294](https://github.com/JustVugg/colibri/pull/294))
+pins every forward issued while drafts are live to the platform's S=1 kernel
+family. For byte-exact reproducibility across runs: `DRAFT=0`, plus `IDOT=0
+COLI_CUDA=0` if you also want kernel-family/GPU independence. Acceptance
+percentages are not comparable across engine versions under `--topp`
+([#163](https://github.com/JustVugg/colibri/issues/163) has the full story).
+
+GLM-5.2's native MTP head drafts tokens that the main model verifies in one
+batched forward: 2.2–2.8 tokens/forward when it pays. The MTP head must be
+**int8**: int4 heads collapse to 0–4% acceptance
+([#8](https://github.com/JustVugg/colibri/issues/8)). Grammar-forced drafts
+([`GRAMMAR=file.gbnf`](grammar-draft.md)) add nearly free acceptance on
+constrained JSON output. Whether speculation is a net win depends on your cache
+temperature: measure, and use `DRAFT=0` when it does not pay.
+
+Verify batches can also opt into an **exact attention core** with
+`COLI_EXACT_VERIFY=1` ([#689](https://github.com/JustVugg/colibri/issues/689)):
+the CPU MLA-absorb score and context dots accumulate integer products and round
+once, so a near-tie in a verify row resolves the same way on every host, at
+roughly 0.6x tok/s on a tiny oracle (the dot itself is ~5–7x the float loop).
+Two limits to know: with a quantised KV cache (`tq1`, TQ or int8 KV) the
+context dot keeps the float path, so exactness there is not provided; and a
+real near-tie flip has only been argued, not yet caught on GLM-5.2 at n=64.
+
+## Approximate mode: `DEGRADE_ZERO` (opt-in, OLMoE-calibrated)
+
+`DEGRADE_ZERO=1` enables an opt-in degraded inference policy: when a prefetch
+deadline is missed, experts whose per-position gate weight falls below
+`DEGRADE_TAU` (default 0.03) are **zero-filled instead of loaded from disk**.
+The slot contributes nothing to the layer output; the approximation is the
+dropped mass, not a rescaled version of it (renorm is catastrophically worse —
+see issue #865 for the measured A/B).
+
+This reduces blocking disk reads on NVMe-bound workloads at the cost of a small
+quality hit. Measured on OLMoE-1B-7B:
+
+| `DEGRADE_TAU` | slots zeroed | ppl delta |
+|---|---|---|
+| 0.03 | ~22% | +2.9% |
+| 0.05 | ~60% | +41% |
+
+**These numbers are OLMoE-specific.** GLM-5.2 (`norm_topk=1`) and Kimi K3 have
+different router contracts and expert counts — their operating points have not
+been measured. Until they are, treat `tau=0.03` as a starting point and verify
+quality on your model before relying on it.
+
+**These numbers assume a warm expert cache.** Cold-start sessions — where the cache
+begins empty and all experts miss initially — will see higher drop rates until the LRU
+fills. The steady-state perplexity delta above is what was measured; cold-start transient
+behavior has not been separately characterized.
+
+The feature is decode-only (`S≤4` guard, same as `EXPERT_BUDGET`): dropping
+experts during prefill corrupts the KV cache. A rescue rule ensures no token
+position is left with zero routed experts. Resident (pinned or LRU-cached)
+experts are never dropped regardless of weight.
+
+The `[PROF]` footer reports the total zeroed slot count and the top-3 layers by
+drop share when the flag is active, so a miscalibrated tau is visible rather
+than silent.
+
+```bash
+DEGRADE_ZERO=1 DEGRADE_TAU=0.03 COLI_MODEL=/nvme/glm52_i4 ./coli chat
+```
+
+See [ENVIRONMENT.md](ENVIRONMENT.md) for the full variable reference and
+[issue #865](https://github.com/JustVugg/colibri/issues/865) for the
+measurement methodology.
+
+## Conversations reopen warm
+
+`coli chat` persists the compressed MLA KV-cache to disk after every turn
+(`.coli_kv`, ~182 KB/token, appended incrementally, crash-safe). Close the chat,
+reopen it tomorrow — the model still remembers the whole conversation and **zero
+re-prefill happens**: validated byte-identical to an uninterrupted session.
+`:reset` clears it, `KVSAVE=0` disables it.

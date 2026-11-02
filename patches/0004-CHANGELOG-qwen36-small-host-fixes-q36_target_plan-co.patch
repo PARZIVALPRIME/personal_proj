@@ -1,0 +1,33 @@
+From 0e037bbe7798f0f319fde42b28591e6b107c0d32 Mon Sep 17 00:00:00 2001
+From: MOHAMMAD <mohamrib@novartis.net>
+Date: Mon, 2 Nov 2026 12:46:07 +0530
+Subject: [PATCH 4/4] CHANGELOG: qwen36 small-host fixes, q36_target_plan,
+ coliagent
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ CHANGELOG.md | 8 ++++++++
+ 1 file changed, 8 insertions(+)
+
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 2ccc8cc7..52efd199 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
+ 
+ ## [Unreleased]
+ 
++- qwen36 on small hosts:
++  - When the RAM plan comes out under top-k, the gateway now hands the engine cap 0 (auto) instead of an explicit 8.
++  - The engine sizes its expert cache from the current working set, minus the KV cache it will grow into at `Q36_MAXT` (`Q36_KV_RESERVE`), and never below top-k.
++  - The trunk probe warms the card for `COLI_TRUNK_PROBE_WARM_MS` and spreads the measured round trip over `COLI_TRUNK_PROBE_PER_SYNC` GEMVs when the CUDA chain will run.
++  - Not yet measured on a 4 GB laptop: see docs/q36-rtx3050-engineering.md.
++- `c/tools/q36_target_plan.py`: memory, placement and decode estimate for qwen36 on a small machine, and a launch script.
++- `agent/` (coliagent): a stdlib-only coding agent with a frozen permission policy, evidence-backed claims, and a gated self-improvement cycle in isolated worktrees (never merges or pushes).
++
+ ## [2.1.0] - 2026-10-31
+ 
+ 387 pull requests since v2.0.0, 208 of them from 35 contributors. GGUF files run
+-- 
+2.53.0.windows.3
+

@@ -1,0 +1,576 @@
+From 582072972e82e936ac19f740cff00d20beb8d8f9 Mon Sep 17 00:00:00 2001
+From: MOHAMMAD <mohamrib@novartis.net>
+Date: Mon, 2 Nov 2026 12:16:58 +0530
+Subject: [PATCH 1/4] qwen36: size the expert cache from measured RAM on small
+ hosts; laptop-aware trunk probe
+
+On a 16 GB host the gateway's RAM plan reserved ~3.7 GB of runtime headroom
+plus a full-context KV, found room for 0 slots and floored the cap at top-k (8),
+passing it as an explicit argv cap. That overrode the engine's own auto-sizing,
+which measures RAM after loading, so nearly every token streamed its routed
+experts from disk.
+
+- openai_server.cap_for_arch: a qwen36 plan below the floor now hands the
+  engine cap 0 (auto) instead of forcing 8. qwen38 is unchanged.
+- qwen36_cap_for_ram: never below top-k, and the KV the context ceiling will
+  grow into (allocated lazily by ensure_kv) comes out of the room
+  (Q36_KV_RESERVE=0 opts out). The resident set is the current working set
+  rather than the peak (PeakWorkingSetSize / ru_maxrss), which still counted
+  float32 copies the load had freed.
+- trunk probe: time-based warm-up (COLI_TRUNK_PROBE_WARM_MS), the synchronous
+  round trip measured on a tiny GEMV and spread over COLI_TRUNK_PROBE_PER_SYNC
+  GEMVs when the CUDA chain will run (whole trunk on the probed card). The
+  experts keep the synchronous verdict (#2211). The verdict is a pure function
+  with tests.
+
+Not measured on the target (Ryzen 7 5800HS + RTX 3050 4 GB); covered by unit
+tests and the fake-CUDA chain test only.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ c/Makefile                           |   4 +
+ c/openai_server.py                   |  12 ++-
+ c/qwen36.c                           | 150 ++++++++++++++++++++++++---
+ c/tests/test_openai_server.py        |  10 +-
+ c/tests/test_qwen36_cap_precedence.c |  79 +++++++++++---
+ c/tests/test_qwen36_trunk_probe.c    |  42 ++++++++
+ docs/ENVIRONMENT.md                  |   3 +
+ docs/qwen36-cuda-tier.md             |  15 ++-
+ 8 files changed, 279 insertions(+), 36 deletions(-)
+ create mode 100644 c/tests/test_qwen36_trunk_probe.c
+
+diff --git a/c/Makefile b/c/Makefile
+index 8bf22cd0..ecd376ba 100644
+--- a/c/Makefile
++++ b/c/Makefile
+@@ -1858,6 +1858,10 @@ tests/test_qwen36_slot_int8$(EXE): tests/test_qwen36_slot_int8.c qwen36.c $(QWEN
+ tests/test_qwen36_cap_precedence$(EXE): tests/test_qwen36_cap_precedence.c qwen36.c $(QWEN36_TIER_OBJ) $(CUDA_OBJ) $(VK_OBJ)
+ 	$(CC) $(QWEN36_CFLAGS) $< $(QWEN36_TIER_OBJ) $(CUDA_OBJ) $(VK_OBJ) -o $@ $(QWEN36_LDFLAGS)
+ 
++# q36_trunk_probe_verdict(): the trunk probe's GPU-vs-CPU verdict with the chain's round trip spread.
++tests/test_qwen36_trunk_probe$(EXE): tests/test_qwen36_trunk_probe.c qwen36.c $(QWEN36_TIER_OBJ) $(CUDA_OBJ) $(VK_OBJ)
++	$(CC) $(QWEN36_CFLAGS) $< $(QWEN36_TIER_OBJ) $(CUDA_OBJ) $(VK_OBJ) -o $@ $(QWEN36_LDFLAGS)
++
+ # the dense trunk's integer path: quantizer contract, int4 planar packing, dispatch.
+ tests/test_qwen36_dense_idot$(EXE): tests/test_qwen36_dense_idot.c qwen36.c $(QWEN36_TIER_OBJ) $(CUDA_OBJ) $(VK_OBJ)
+ 	$(CC) $(QWEN36_CFLAGS) $< $(QWEN36_TIER_OBJ) $(CUDA_OBJ) $(VK_OBJ) -o $@ $(QWEN36_LDFLAGS)
+diff --git a/c/openai_server.py b/c/openai_server.py
+index 6d9b3add..5c9d6bd9 100644
+--- a/c/openai_server.py
++++ b/c/openai_server.py
+@@ -6390,7 +6390,17 @@ def cap_for_arch(arch, cap, env=None, model=None):
+         # decoded at 0.03 tok/s while the engine measured room for 99 (#2031).
+         floor = max(limits.implicit_cap, _route_top_k(model)) if arch in ("qwen36", "qwen38") else 1
+         if slots < floor:
+-            if arch in ("qwen36", "qwen38"):
++            if arch == "qwen36":
++                # The plan prices a fixed multi-GB runtime reserve and the whole
++                # context's KV before a byte is loaded; on a 16 GB Windows laptop
++                # that leaves nothing, and an explicit 8 then overrode the engine's
++                # own sizing, which measures the RAM after loading (room for ~100
++                # slots there) and keeps at least one token's route (top-k).
++                print(f"[{arch}] RAM plan: {max(slots, 0)} expert cache slots/layer, below one "
++                      f"token's route; the engine sizes the cache from the RAM it measures "
++                      f"after loading (at least {floor}; --cap or --ram sets it)", file=sys.stderr)
++                return 0
++            if arch == "qwen38":
+                 print(f"[{arch}] RAM plan: {max(slots, 0)} expert cache slots/layer, below one "
+                       f"token's route; starting at {floor} (--cap or --ram sets more)", file=sys.stderr)
+                 return floor
+diff --git a/c/qwen36.c b/c/qwen36.c
+index b4135f63..9a36399a 100644
+--- a/c/qwen36.c
++++ b/c/qwen36.c
+@@ -1382,7 +1382,8 @@ static int qwen36_resolved_cap(int cap, const LCache *cache, int n_layers) {
+ 
+ static int qwen36_cap_for_ram(double resident_gb, double avail_gb, double ram_gb_override,
+                                int hidden, int inter, int n_experts, int n_active_layers,
+-                               int is_int4, double *slot_gb_out, double *budget_gb_out);
++                               int is_int4, int floor_slots, double reserve_gb,
++                               double *slot_gb_out, double *budget_gb_out);
+ 
+ #ifdef COLI_CACHE_INDEX_TEST
+ static uint64_t g_slot_index_probes;
+@@ -1474,6 +1475,26 @@ static double rss_gb(void) { struct rusage r; getrusage(RUSAGE_SELF, &r); return
+ #endif
+ /* same wrapper convention as colibri.c/olmoe.c/inkling.c/kimi_k3.c/deepseek_v4.c */
+ static double mem_available_gb(void) { return compat_mem_available_gb(); }
++/* The resident set NOW, in the unit of rss_gb (GiB). rss_gb() is the PEAK (ru_maxrss;
++ * compat.h's Windows shim reads PeakWorkingSetSize), which still counts the float32
++ * copies the load quantized and freed: against a RAM_GB budget that peak took room
++ * from the expert cache that the process no longer holds. Falls back to the peak. */
++static double rss_now_gb(void) {
++#if defined(_WIN32)
++    PROCESS_MEMORY_COUNTERS pmc;
++    memset(&pmc, 0, sizeof pmc); pmc.cb = sizeof pmc;
++    if (GetProcessMemoryInfo(GetCurrentProcess(), &pmc, sizeof pmc) && pmc.WorkingSetSize)
++        return (double)pmc.WorkingSetSize / 1073741824.0;
++#elif defined(__linux__)
++    FILE *f = fopen("/proc/self/statm", "r");
++    if (f) {
++        long size = 0, res = 0; int ok = fscanf(f, "%ld %ld", &size, &res) == 2; fclose(f);
++        long pg = sysconf(_SC_PAGESIZE);
++        if (ok && res > 0 && pg > 0) return (double)res * (double)pg / 1073741824.0;
++    }
++#endif
++    return rss_gb();
++}
+ 
+ /* ---- M-PROF (R2): per-phase wall-clock accumulators, COLI_TIMERS=1 ---- */
+ static int g_timers = -1;
+@@ -1542,6 +1563,21 @@ static inline int q36_kv16(void) {
+     return g_q36_kv16;
+ }
+ static inline size_t q36_kv_es(void) { return q36_kv16() ? sizeof(uint16_t) : sizeof(float); }
++/* The KV cache a context of max_ctx positions will hold on layers [lb, le), in GiB.
++ * ensure_kv grows it lazily, so none of it is resident when the expert cache is sized
++ * after loading: without this reserve a long chat on a 16 GB host grew its KV into the
++ * RAM the slots had already taken (0.65 GiB float16 at 32k on the 35B). Pure. */
++static double q36_kv_reserve_gb(const Cfg *c, int lb, int le, int max_ctx, size_t es) {
++    if (!c || max_ctx < 1 || !c->is_attn) return 0.0;
++    int ring = q36_ring_for(c, max_ctx);
++    double bytes = 0.0;
++    for (int i = lb < 0 ? 0 : lb; i < le && i < c->n_layers; i++) {
++        if (!c->is_attn[i]) continue;
++        int rows = ring && c->win_layer && c->win_layer[i] ? ring : max_ctx;
++        bytes += 2.0 * c->kv_heads * (double)rows * c->k_head_dim * (double)es;
++    }
++    return bytes / 1073741824.0;
++}
+ static inline void *q36_kv_ptr(void *base, int64_t idx) { return (char *)base + idx * (int64_t)q36_kv_es(); }
+ static inline void q36_kv_put(void *base, int64_t idx, const float *src, int64_t n) {
+     if (q36_kv16()) kv16_pack((uint16_t *)base + idx, src, n);
+@@ -4189,20 +4225,28 @@ static void model_init_range(Model *m, const char *snap, int cap, int bits,
+          * ran) but is memoized process-globally, not per-Model* -- a
+          * pre-existing, unrelated bug if this process ever builds two models
+          * with different container formats (out of scope here). */
+-        double resident = rss_gb();
++        double resident = rss_now_gb();
+         double avail = mem_available_gb();
+         const char *ram_env = getenv("RAM_GB");
+         double ram_override = ram_env ? atof(ram_env) : 0.0;
+         int n_active = layer_end - layer_begin;
+         double slot_gb = 0.0, budget_gb = 0.0;
++        /* The KV the context ceiling will grow into is not resident yet: keep its room
++         * (Q36_KV_RESERVE=0 gives it to the cache, as before). */
++        const char *kvr = getenv("Q36_KV_RESERVE");
++        double kv_reserve = kvr && *kvr == '0'
++            ? 0.0 : q36_kv_reserve_gb(c, layer_begin, layer_end, qwen36_max_ctx(), q36_kv_es());
++        /* top-k slots per layer: one token's routed experts all fit, so a token never
++         * evicts an expert it is still about to use (the gateway's floor, #2031) */
+         cap = qwen36_cap_for_ram(resident, avail, ram_override,
+                                   q36_eh(c), c->inter, c->n_experts, n_active,
+-                                  xf_mode(m), &slot_gb, &budget_gb);
++                                  xf_mode(m), c->topk, kv_reserve, &slot_gb, &budget_gb);
+         fprintf(stderr, "[qwen36] cache auto-sized: %d slots/layer of %d experts "
+-                        "(%.1f GB budget via %s, %.1f GB dense resident, %.0f MB/slot)\n",
++                        "(%.1f GB budget via %s, %.1f GB resident, %.2f GB KV reserved "
++                        "for %d positions, %.0f MB/slot, floor %d)\n",
+                 cap, c->n_experts, budget_gb,
+                 ram_override > 0.0 ? "RAM_GB" : "88% of available RAM",
+-                resident, slot_gb * 1000.0);
++                resident, kv_reserve, qwen36_max_ctx(), slot_gb * 1000.0, c->topk);
+     }
+     m->cache = calloc((size_t)c->n_layers, sizeof(LCache));
+     for (int i = layer_begin; i < layer_end; i++) {
+@@ -4260,19 +4304,23 @@ static int64_t scale_count_d (const Cfg *c){ int gs = down_gs_of(c); return gs ?
+  * n_active_layers instead of always c->n_layers, for the Segment/Edge
+  * partial-model layer-range builds. Approximates the scale-float block the
+  * same way olmoe.c does (ignores expert_gs grouping precision) -- this is a
+- * budget estimate under a safety margin, not exact accounting. */
++ * budget estimate under a safety margin, not exact accounting.
++ * reserve_gb is kept out of the room (the KV the context will grow into);
++ * floor_slots is the least it returns (top-k), never above n_experts. */
+ static int qwen36_cap_for_ram(double resident_gb, double avail_gb, double ram_gb_override,
+                                int hidden, int inter, int n_experts, int n_active_layers,
+-                               int is_int4, double *slot_gb_out, double *budget_gb_out) {
++                               int is_int4, int floor_slots, double reserve_gb,
++                               double *slot_gb_out, double *budget_gb_out) {
+     double budget = ram_gb_override > 0.0 ? ram_gb_override : resident_gb + avail_gb * 0.88;
+     if (budget_gb_out) *budget_gb_out = budget;
+-    double room = budget - resident_gb;
++    double room = budget - resident_gb - (reserve_gb > 0.0 ? reserve_gb : 0.0);
+     double per_expert = (double)hidden * inter * (is_int4 ? 1.5 : 3.0);
+     double slot_gb = (per_expert + (double)(inter * 2 + hidden) * sizeof(float)) / 1e9;
+     if (slot_gb_out) *slot_gb_out = slot_gb;
+     int layers = n_active_layers < 1 ? 1 : n_active_layers;
+     int derived = room > 0.0 && slot_gb > 0.0 ? (int)(room / slot_gb / (double)layers) : 0;
+     if (derived < 1) derived = 1;
++    if (derived < floor_slots) derived = floor_slots;
+     if (n_experts > 0 && derived > n_experts) derived = n_experts;
+     return derived;
+ }
+@@ -6433,8 +6481,31 @@ static int trunk_place_dense(Model *m, double *vram_bytes, int kinds[3]){
+  * the experts went to the CPU: decode 21.5 tok/s, 113 on the card.
+  * Only the automatic placement is questioned: a hand-written COLI_PLACE
+  * stands. COLI_TRUNK_PROBE=0 skips the probe and trusts the placer. The
+- * probe's copy stays resident (one projection, 16 MiB on the 35B). */
+-static int trunk_probe_gpu_wins(Model *m){
++ * probe's copy stays resident (one projection, 16 MiB on the 35B).
++ *
++ * Laptop GPUs (an RTX 3050 4 GB beside a Ryzen 7 5800HS) lost this probe for a
++ * reason decode never sees: a count-based warm-up of three GEMVs leaves the card
++ * in its idle P-state, and each timed GEMV pays a whole synchronous round trip
++ * (launch, copies, WDDM) that the CUDA chain pays once per several matrices. The
++ * warm-up is now time-based (COLI_TRUNK_PROBE_WARM_MS, 250 ms), the fixed round
++ * trip is measured on a tiny matrix, and when the chain will run it is spread over
++ * the GEMVs one sync covers (COLI_TRUNK_PROBE_PER_SYNC, 4; 1 = the old verdict).
++ * Expected to flip the verdict there, not measured on that machine yet. */
++/* Pure: the GPU's effective time per GEMV and whether it beats the CPU. gpu_s is
++ * one synchronous GEMV, fixed_s the round trip a tiny one costs (part of gpu_s);
++ * a chain pays that round trip once per per_sync GEMVs. */
++static int q36_trunk_probe_verdict(double gpu_s, double fixed_s, double cpu_s,
++                                   int chain, int per_sync, double *gpu_eff_s) {
++    double eff = gpu_s;
++    if (chain && per_sync > 1 && fixed_s > 0.0) {
++        if (fixed_s > gpu_s) fixed_s = gpu_s;
++        eff = gpu_s - fixed_s + fixed_s / (double)per_sync;
++    }
++    if (gpu_eff_s) *gpu_eff_s = eff;
++    return eff < cpu_s;
++}
++static int trunk_probe_gpu_wins(Model *m, int *experts_win){
++    if (experts_win) *experts_win = 1;
+     const char *e = getenv("COLI_TRUNK_PROBE");
+     if (e && *e == '0') return 1;
+     if (!qt_place_is_auto()) return 1;
+@@ -6448,12 +6519,49 @@ static int trunk_probe_gpu_wins(Model *m){
+     if (!w) return 1;                                /* dense-i8 off: nothing will be placed */
+     if (dev == QT_PLACE_CPU) dev = qt_place_of("lmhead", 0);
+     if (dev == QT_PLACE_CPU) return 1;               /* nothing placed: nothing to measure */
++    /* the chain runs only with every layer's projections, shared expert and lm_head on
++     * that one device (q36cc_take); otherwise each GEMV pays its own round trip */
++    int whole = qt_place_of("lmhead", 0) == dev;
++    for (int i = 0; i < c->n_layers && whole; i++) {
++        if (q36_dense_l(c, i)) continue;
++        if (c->is_attn[i]) whole = qt_place_of("attnproj", i) == dev;
++        else whole = qt_place_of("dnproj", i) == dev && qt_place_of("dnout", i) == dev;
++        if (whole && (m->L[i].sh_g.q || m->L[i].sh_g.w)) whole = qt_place_of("shexp", i) == dev;
++    }
+     int I = w->I, O = w->O;
+     int h = qt_dense_init(w->q, w->sc, I, O, dev);
+     if (h < 0) return 1;                             /* cannot measure: the placer's word stands */
+     float *x = malloc((size_t)I * sizeof(float)), *y = malloc((size_t)O * sizeof(float));
+     if (!x || !y) { free(x); free(y); return 1; }
+     for (int i = 0; i < I; i++) x[i] = sinf(0.37f * (float)i);
++    const char *wm = getenv("COLI_TRUNK_PROBE_WARM_MS");
++    double warm_s = (wm && *wm ? atof(wm) : 250.0) / 1e3;
++    {   /* until the clocks are up: time, not a count (capped, a slow card stops early) */
++        double t0 = now_s(); int k = 0;
++        do { if (!qt_dense_matmul(h, y, x, I, O)) { free(x); free(y); return 1; } }
++        while (++k < 4096 && now_s() - t0 < warm_s);
++    }
++    /* the round trip alone: a [8 x 256] matrix, so the kernel itself is nothing */
++    double fixed = 0.0;
++    {
++        enum { TI = 256, TO = 8 };
++        int8_t tq[TI * TO]; float tsc[TO], ty[TO];
++        for (int i = 0; i < TI * TO; i++) tq[i] = (int8_t)((i * 7) % 15 - 7);
++        for (int o = 0; o < TO; o++) tsc[o] = 1.0f / 64.0f;
++        int th = qt_dense_init(tq, tsc, TI, TO, dev);
++        if (th >= 0) {
++            fixed = 1e30;
++            for (int r = 0; r < 3; r++) {
++                for (int k = 0; k < 3; k++) if (!qt_dense_matmul(th, ty, x, TI, TO)) { fixed = 0.0; break; }
++                if (fixed == 0.0) break;
++                double t0 = now_s();
++                for (int k = 0; k < 10; k++) qt_dense_matmul(th, ty, x, TI, TO);
++                double tf = (now_s() - t0) / 10;
++                if (tf < fixed) fixed = tf;
++            }
++            if (fixed >= 1e29) fixed = 0.0;
++        }
++    }
+     double gpu = 1e30, cpu = 1e30;
+     for (int r = 0; r < 3; r++) {
+         for (int k = 0; k < 3; k++) if (!qt_dense_matmul(h, y, x, I, O)) { free(x); free(y); return 1; }
+@@ -6469,9 +6577,18 @@ static int trunk_probe_gpu_wins(Model *m){
+         if (tc < cpu) cpu = tc;
+     }
+     free(x); free(y);
+-    int wins = gpu < cpu;
+-    fprintf(stderr, "[place] probe: one [%d x %d] int8 GEMV takes %.3f ms on CUDA dev %d, %.3f ms on the CPU -> trunk %s\n",
+-            O, I, gpu * 1e3, dev, cpu * 1e3, wins ? "to VRAM" : "stays on the CPU");
++    const char *ce = getenv("COLI_CUDA_CHAIN"), *ps = getenv("COLI_TRUNK_PROBE_PER_SYNC");
++    int chain = !(ce && *ce == '0') && whole;
++    int per_sync = ps && *ps ? atoi(ps) : 4;
++    double eff = gpu;
++    int wins = q36_trunk_probe_verdict(gpu, fixed, cpu, chain, per_sync, &eff);
++    /* the tier's experts pay the synchronous round trip per call (#2211): their verdict is the plain one */
++    if (experts_win) *experts_win = q36_trunk_probe_verdict(gpu, fixed, cpu, 0, 1, NULL);
++    fprintf(stderr, "[place] probe: one [%d x %d] int8 GEMV takes %.3f ms on CUDA dev %d "
++                    "(%.3f ms of it the round trip; %.3f ms a GEMV %s), %.3f ms on the CPU -> trunk %s\n",
++            O, I, gpu * 1e3, dev, fixed * 1e3, eff * 1e3,
++            chain && per_sync > 1 ? "in the chain" : whole ? "synchronous" : "synchronous, the trunk not whole on the device",
++            cpu * 1e3, wins ? "to VRAM" : "stays on the CPU");
+     return wins;
+ }
+ 
+@@ -9767,9 +9884,10 @@ int main(int argc, char **argv) {
+         atexit(qt_shutdown);
+         for (int i = 0; i < m.c.n_layers; i++) if (q36_dense_l(&m.c, i)) qt_layer_off(i);   /* Flint's dense layers */
+         /* The placer predicted; measure before uploading a byte of trunk. */
+-        if (!trunk_probe_gpu_wins(&m)) {
+-            qt_trunk_withdraw("measured slower than the CPU");
+-            qt_experts_withdraw("the device's GEMV measured slower than the CPU's");
++        {
++            int experts_win = 1;
++            if (!trunk_probe_gpu_wins(&m, &experts_win)) qt_trunk_withdraw("measured slower than the CPU");
++            if (!experts_win) qt_experts_withdraw("the device's GEMV measured slower than the CPU's");
+         }
+         /* R4 role split: park the dense-i8 lm_head on COLI_LMHEAD_GPU. The
+          * QW struct on m.lm_head holds the int8 rows + per-row scales the
+diff --git a/c/tests/test_openai_server.py b/c/tests/test_openai_server.py
+index 9e648353..fe9550d9 100644
+--- a/c/tests/test_openai_server.py
++++ b/c/tests/test_openai_server.py
+@@ -2915,13 +2915,14 @@ class CapSentinelShimTest(unittest.TestCase):
+                 self.assertEqual(popen.call_args[0][0][:2], [executable, "153"])
+ 
+     def test_qwen_without_a_plan_keeps_the_implicit_cap(self):
+-        for arch, implicit in (("qwen36", 8), ("qwen38", 1)):
++        for arch, implicit, empty in (("qwen36", 8, 0), ("qwen38", 1, 1)):
+             with self.subTest(arch=arch):
+                 with patch("resource_plan.build_plan", side_effect=ValueError("no safetensors shards")):
+                     self.assertEqual(cap_for_arch(arch, None, {}, model="model"), implicit)
++                # an empty plan: Qwen3.6's engine sizes its own cache after loading (0)
+                 with patch("resource_plan.build_plan", return_value={
+                         "tiers": {"ram": {"cache_slots_per_layer": 0}}}):
+-                    self.assertEqual(cap_for_arch(arch, None, {}, model="model"), implicit)
++                    self.assertEqual(cap_for_arch(arch, None, {}, model="model"), empty)
+                 with patch("resource_plan.build_plan") as planner:
+                     self.assertEqual(cap_for_arch(arch, 5, {}, model="model"), 5)
+                     self.assertEqual(cap_for_arch(arch, None, {"COLI_PROFILE_CAP": "105"},
+@@ -2939,7 +2940,10 @@ class CapSentinelShimTest(unittest.TestCase):
+             (cfg.get("text_config") or cfg)["num_experts_per_tok"] = top_k
+             cfg_path.write_text(json.dumps(cfg))
+             floor = max(implicit, top_k)
+-            for planned, expected in ((0, floor), (3, floor), (153, 153)):
++            # Qwen3.6 below one route: the engine's post-load RAM sizing (0), which
++            # keeps at least top-k itself; an explicit 8 overrode it (16 GB laptops)
++            below = 0 if arch == "qwen36" else floor
++            for planned, expected in ((0, below), (3, below), (153, 153)):
+                 with self.subTest(arch=arch, planned=planned), patch("resource_plan.build_plan", return_value={
+                         "tiers": {"ram": {"cache_slots_per_layer": planned}}}):
+                     self.assertEqual(cap_for_arch(arch, None, {}, model=model), expected)
+diff --git a/c/tests/test_qwen36_cap_precedence.c b/c/tests/test_qwen36_cap_precedence.c
+index 8d543ec7..4a17a176 100644
+--- a/c/tests/test_qwen36_cap_precedence.c
++++ b/c/tests/test_qwen36_cap_precedence.c
+@@ -29,8 +29,8 @@ int main(void) {
+      * exactly when one is given. */
+     {
+         double slot_gb_a = 0, slot_gb_b = 0, budget_a = 0, budget_b = 0;
+-        int cap_computed = qwen36_cap_for_ram(4.83, 20.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 0, &slot_gb_a, &budget_a);
+-        int cap_override  = qwen36_cap_for_ram(4.83, 20.0, 64.0, HIDDEN, INTER, N_EXPERTS, 40, 0, &slot_gb_b, &budget_b);
++        int cap_computed = qwen36_cap_for_ram(4.83, 20.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 0, 0, 0.0, &slot_gb_a, &budget_a);
++        int cap_override  = qwen36_cap_for_ram(4.83, 20.0, 64.0, HIDDEN, INTER, N_EXPERTS, 40, 0, 0, 0.0, &slot_gb_b, &budget_b);
+         CHECK(cap_override > cap_computed);
+         CHECK(slot_gb_a == slot_gb_b); /* override changes the budget, not the per-slot size */
+         CHECK(budget_a == 4.83 + 20.0 * 0.88);
+@@ -43,9 +43,9 @@ int main(void) {
+      * never been read, not propagate a negative/zero budget. */
+     {
+         double budget_unset = 0, budget_negative = 0, budget_zero = 0;
+-        int cap_unset = qwen36_cap_for_ram(4.83, 20.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 0, NULL, &budget_unset);
+-        int cap_negative = qwen36_cap_for_ram(4.83, 20.0, -5.0, HIDDEN, INTER, N_EXPERTS, 40, 0, NULL, &budget_negative);
+-        int cap_zero = qwen36_cap_for_ram(4.83, 20.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 0, NULL, &budget_zero);
++        int cap_unset = qwen36_cap_for_ram(4.83, 20.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 0, 0, 0.0, NULL, &budget_unset);
++        int cap_negative = qwen36_cap_for_ram(4.83, 20.0, -5.0, HIDDEN, INTER, N_EXPERTS, 40, 0, 0, 0.0, NULL, &budget_negative);
++        int cap_zero = qwen36_cap_for_ram(4.83, 20.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 0, 0, 0.0, NULL, &budget_zero);
+         CHECK(cap_unset == cap_negative && cap_unset == cap_zero);
+         CHECK(budget_unset == budget_negative && budget_unset == budget_zero);
+     }
+@@ -56,8 +56,8 @@ int main(void) {
+      * at n_experts on either side). */
+     {
+         double slot_gb_int8 = 0, slot_gb_int4 = 0;
+-        int cap_int8 = qwen36_cap_for_ram(4.83, 3.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 0, &slot_gb_int8, NULL);
+-        int cap_int4 = qwen36_cap_for_ram(4.83, 3.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 1, &slot_gb_int4, NULL);
++        int cap_int8 = qwen36_cap_for_ram(4.83, 3.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 0, 0, 0.0, &slot_gb_int8, NULL);
++        int cap_int4 = qwen36_cap_for_ram(4.83, 3.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 1, 0, 0.0, &slot_gb_int4, NULL);
+         CHECK(slot_gb_int4 < slot_gb_int8);
+         CHECK(cap_int4 >= cap_int8);
+         CHECK(cap_int4 > 1 && cap_int4 < N_EXPERTS);
+@@ -70,15 +70,15 @@ int main(void) {
+      * would then find no slot to evict and hang; see the comment above the
+      * cap<0 CLI check in main()). */
+     {
+-        int cap = qwen36_cap_for_ram(4.83, 0.0, 4.83, HIDDEN, INTER, N_EXPERTS, 40, 0, NULL, NULL);
++        int cap = qwen36_cap_for_ram(4.83, 0.0, 4.83, HIDDEN, INTER, N_EXPERTS, 40, 0, 0, 0.0, NULL, NULL);
+         CHECK(cap == 1);
+-        int cap_neg_room = qwen36_cap_for_ram(4.83, 0.0, 1.0, HIDDEN, INTER, N_EXPERTS, 40, 0, NULL, NULL);
++        int cap_neg_room = qwen36_cap_for_ram(4.83, 0.0, 1.0, HIDDEN, INTER, N_EXPERTS, 40, 0, 0, 0.0, NULL, NULL);
+         CHECK(cap_neg_room == 1);
+     }
+ 
+     /* A huge budget clamps at n_experts, never runs past it. */
+     {
+-        int cap = qwen36_cap_for_ram(4.83, 1000.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 0, NULL, NULL);
++        int cap = qwen36_cap_for_ram(4.83, 1000.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 0, 0, 0.0, NULL, NULL);
+         CHECK(cap == N_EXPERTS);
+     }
+ 
+@@ -87,17 +87,66 @@ int main(void) {
+      * (Segment/Edge partial-model builds pass layer_end-layer_begin here,
+      * not always the model's full n_layers). */
+     {
+-        int cap_40 = qwen36_cap_for_ram(4.83, 3.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 0, NULL, NULL);
+-        int cap_80 = qwen36_cap_for_ram(4.83, 3.0, 0.0, HIDDEN, INTER, N_EXPERTS, 80, 0, NULL, NULL);
++        int cap_40 = qwen36_cap_for_ram(4.83, 3.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 0, 0, 0.0, NULL, NULL);
++        int cap_80 = qwen36_cap_for_ram(4.83, 3.0, 0.0, HIDDEN, INTER, N_EXPERTS, 80, 0, 0, 0.0, NULL, NULL);
+         CHECK(cap_80 < cap_40);
+         CHECK(cap_80 >= cap_40 / 2 - 1 && cap_80 <= cap_40 / 2 + 1);
+     }
+ 
+     /* Degenerate inputs don't crash and still return a floored cap. */
+     {
+-        CHECK(qwen36_cap_for_ram(4.83, 3.0, 0.0, HIDDEN, INTER, N_EXPERTS, 0, 0, NULL, NULL) >= 1);
+-        CHECK(qwen36_cap_for_ram(4.83, 3.0, 0.0, HIDDEN, INTER, N_EXPERTS, -1, 0, NULL, NULL) >= 1);
+-        CHECK(qwen36_cap_for_ram(0.0, 0.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 0, NULL, NULL) >= 1);
++        CHECK(qwen36_cap_for_ram(4.83, 3.0, 0.0, HIDDEN, INTER, N_EXPERTS, 0, 0, 0, 0.0, NULL, NULL) >= 1);
++        CHECK(qwen36_cap_for_ram(4.83, 3.0, 0.0, HIDDEN, INTER, N_EXPERTS, -1, 0, 0, 0.0, NULL, NULL) >= 1);
++        CHECK(qwen36_cap_for_ram(0.0, 0.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 0, 0, 0.0, NULL, NULL) >= 1);
++    }
++
++    /* The top-k floor: a 16 GB host with no room left after loading still gets
++     * one token's routed experts per layer, not 1 slot (every token streamed its
++     * 8 experts x 40 layers from disk), and the floor never exceeds n_experts. */
++    {
++        CHECK(qwen36_cap_for_ram(4.83, 0.0, 4.83, HIDDEN, INTER, N_EXPERTS, 40, 1, 8, 0.0, NULL, NULL) == 8);
++        CHECK(qwen36_cap_for_ram(4.83, 0.0, 1.0, HIDDEN, INTER, N_EXPERTS, 40, 1, 8, 0.0, NULL, NULL) == 8);
++        CHECK(qwen36_cap_for_ram(4.83, 0.0, 4.83, HIDDEN, INTER, 4, 40, 1, 8, 0.0, NULL, NULL) == 4);
++        /* above the floor the floor changes nothing */
++        int free_ = qwen36_cap_for_ram(4.83, 3.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 1, 0, 0.0, NULL, NULL);
++        CHECK(free_ > 8);
++        CHECK(qwen36_cap_for_ram(4.83, 3.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 1, 8, 0.0, NULL, NULL) == free_);
++    }
++
++    /* The KV reserve comes out of the room, not the budget: fewer slots, same
++     * budget reported; a reserve larger than the room falls to the floor; a
++     * negative reserve is ignored. */
++    {
++        double b0 = 0, b1 = 0;
++        int no_kv = qwen36_cap_for_ram(4.83, 6.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 1, 8, 0.0, NULL, &b0);
++        int kv = qwen36_cap_for_ram(4.83, 6.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 1, 8, 0.65, NULL, &b1);
++        CHECK(kv < no_kv && kv >= 8);
++        CHECK(b0 == b1);
++        CHECK(qwen36_cap_for_ram(4.83, 6.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 1, 8, 100.0, NULL, NULL) == 8);
++        CHECK(qwen36_cap_for_ram(4.83, 6.0, 0.0, HIDDEN, INTER, N_EXPERTS, 40, 1, 8, -3.0, NULL, NULL) == no_kv);
++    }
++
++    /* q36_kv_reserve_gb: K and V of every attention layer in the range at the
++     * context ceiling; DeltaNet layers hold none; a sliding-window layer holds
++     * its ring when that is shorter than the context. */
++    {
++        Cfg c; memset(&c, 0, sizeof c);
++        uint8_t attn[8] = {0, 0, 0, 1, 0, 0, 0, 1};
++        c.n_layers = 8; c.is_attn = attn; c.kv_heads = 2; c.k_head_dim = 256;
++        double one = 2.0 * 2 * 32768.0 * 256 * 2 / 1073741824.0;   /* f16, one layer */
++        double all = q36_kv_reserve_gb(&c, 0, 8, 32768, 2);
++        CHECK(all > 2 * one - 1e-9 && all < 2 * one + 1e-9);
++        double half = q36_kv_reserve_gb(&c, 0, 4, 32768, 2);
++        CHECK(half > one - 1e-9 && half < one + 1e-9);
++        CHECK(q36_kv_reserve_gb(&c, 0, 3, 32768, 2) == 0.0);
++        CHECK(q36_kv_reserve_gb(&c, 0, 8, 32768, 4) > all * 2 - 1e-9);
++        CHECK(q36_kv_reserve_gb(&c, 0, 8, 0, 2) == 0.0);
++        CHECK(q36_kv_reserve_gb(NULL, 0, 8, 32768, 2) == 0.0);
++        uint8_t win[8] = {0, 0, 0, 1, 0, 0, 0, 0};
++        c.win_layer = win; c.window = 1024;
++        unsetenv("Q36_KV_RING");
++        double ringed = q36_kv_reserve_gb(&c, 0, 8, 32768, 2);
++        CHECK(ringed < all && ringed > one);
+     }
+ 
+     /* qwen36_resolved_cap: the sentinel must never leave main() unresolved.
+diff --git a/c/tests/test_qwen36_trunk_probe.c b/c/tests/test_qwen36_trunk_probe.c
+new file mode 100644
+index 00000000..53025a0f
+--- /dev/null
++++ b/c/tests/test_qwen36_trunk_probe.c
+@@ -0,0 +1,42 @@
++/* q36_trunk_probe_verdict(): whether the dense trunk goes to VRAM. The probe
++ * times one synchronous GEMV on the device; the CUDA chain pays that call's
++ * round trip once per several GEMVs, so with the chain on the round trip is
++ * spread over COLI_TRUNK_PROBE_PER_SYNC of them. Without the chain, or with
++ * per_sync 1, the verdict is the old one: GPU time against CPU time. */
++#define main qwen36_main_unused
++#include "../qwen36.c"
++#undef main
++
++static int fails = 0;
++#define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); fails++; } } while (0)
++
++int main(void) {
++    double eff = 0;
++
++    /* no chain: the synchronous time decides, as before */
++    CHECK(q36_trunk_probe_verdict(0.40e-3, 0.30e-3, 0.35e-3, 0, 4, &eff) == 0);
++    CHECK(eff == 0.40e-3);
++    CHECK(q36_trunk_probe_verdict(0.30e-3, 0.20e-3, 0.35e-3, 0, 4, NULL) == 1);
++
++    /* the laptop case: a GEMV that loses only by its round trip wins in the chain
++     * (0.10 ms kernel + 0.30/4 ms of round trip = 0.175 ms < 0.35 ms) */
++    CHECK(q36_trunk_probe_verdict(0.40e-3, 0.30e-3, 0.35e-3, 1, 4, &eff) == 1);
++    CHECK(eff > 0.174e-3 && eff < 0.176e-3);
++
++    /* per_sync 1 (or less) is the old verdict even with the chain */
++    CHECK(q36_trunk_probe_verdict(0.40e-3, 0.30e-3, 0.35e-3, 1, 1, &eff) == 0 && eff == 0.40e-3);
++    CHECK(q36_trunk_probe_verdict(0.40e-3, 0.30e-3, 0.35e-3, 1, 0, NULL) == 0);
++
++    /* a slow kernel still loses: the M10 of #1652 stays on the CPU */
++    CHECK(q36_trunk_probe_verdict(68.8e-3, 0.05e-3, 41.7e-3, 1, 4, NULL) == 0);
++
++    /* no round-trip measurement (0) leaves the time as it is */
++    CHECK(q36_trunk_probe_verdict(0.40e-3, 0.0, 0.35e-3, 1, 4, &eff) == 0 && eff == 0.40e-3);
++
++    /* a round trip measured above the whole GEMV (noise) never makes it negative */
++    CHECK(q36_trunk_probe_verdict(0.40e-3, 0.90e-3, 0.05e-3, 1, 4, &eff) == 0);
++    CHECK(eff > 0.0 && eff <= 0.40e-3);
++
++    printf(fails ? "test_qwen36_trunk_probe: FAIL (%d)\n" : "test_qwen36_trunk_probe: PASS\n", fails);
++    return fails != 0;
++}
+diff --git a/docs/ENVIRONMENT.md b/docs/ENVIRONMENT.md
+index 5701afef..091b63d5 100644
+--- a/docs/ENVIRONMENT.md
++++ b/docs/ENVIRONMENT.md
+@@ -574,6 +574,9 @@ and the CPU/GPU execution split.
+ | `Q36_MAXT` | conservative engine default (16384 for a Clef checkpoint, its own `max_length`) | Lower the served/context capacity; it cannot raise the model's compiled safety ceiling. |
+ | `Q36_KV_RING` | on | A sliding-window layer (Flint, Muse Spark) keeps its K/V rows in a ring of `window + 256` rows instead of the whole context, on the host and in the Vulkan and CUDA chains' mirrors (an older CUDA library without the ring's attention keeps a mirror of the context's length): Flint's 35 sliding layers of 49 hold 769 rows each, and its cache at 32768 tokens is 2.0 GB instead of 6.6. `0` keeps every layer at the context's length (an A/B). |
+ | `Q36_KV_RING_SPARE` | `256` | The ring's rows past the window (tests: a small ring); never under 9, what a verify of eight drafts can undo. |
++| `Q36_KV_RESERVE` | on | When the expert cache is auto-sized (cap 0), the RAM the KV cache will grow into at `Q36_MAXT` positions (in its `Q36_KV` element size, ring-sized for sliding layers) comes out of the room for slots, since `ensure_kv` allocates it lazily, after the sizing. The cap also never falls below top-k (one token's routed experts). `0` gives that room back to the cache, as before. |
++| `COLI_TRUNK_PROBE_WARM_MS` | `250` | The trunk probe's warm-up on the card in milliseconds (at most 4096 GEMVs), so a laptop GPU is timed at its working clocks. |
++| `COLI_TRUNK_PROBE_PER_SYNC` | `4` | With the CUDA chain set to run (the whole trunk placed on the probed card), the probe spreads the synchronous round trip it measured over this many GEMVs when it decides the trunk. The experts' verdict stays synchronous. `1` restores the old verdict. See [qwen36-cuda-tier.md](qwen36-cuda-tier.md). |
+ | `Q36_KV` | `f16` | qwen36's KV cache in float16: half the RAM of float32, each K and V value clamped to +-65504 and rounded to the nearest float16, the step's rows rounded before anything reads them, the Vulkan and CUDA chains rounding theirs alike (the same bits on every backend; the devices' mirrors stay float32). Float16 and not bf16: on Muse Spark's tiny oracle, whose heads' outputs are normalised, bf16 moved the teacher-forced NLL from 2.0790 to 2.2305, float16 to 2.0752. An argv run against a `.json` reference (the tiny oracles, `PPL=1`) keeps float32 unless this is set. `f32`: float32. |
+ | `COLI_VULKAN` | `0` | `VK=1` build: the dense trunk on the Vulkan device, and the routed experts on the shared expert tier (`COLI_VK_TIER*`, `COLI_VK_DENSE`, see [Vulkan](#vulkan-any-gpu-with-a-vulkan-12-driver)). With the tier on, the engine keeps the expert history `COLI_USAGE` (default `<snap>/.coli_usage`), saved at every run and serve turn end; it keeps none otherwise. |
+ | `Q36_DN_GPU` | `0` (off) | CUDA expert tier: a decode token runs every DeltaNet layer whose in_proj and out_proj sit on one card end to end on that card (conv, recurrence, gated norm; state resident in VRAM). Measured on the 35B, 3070, trunk in VRAM: DeltaNet 16.2 -> 10.8 ms/token, the token 39.4 -> 33.3 ms. See [qwen36-cuda-tier.md](qwen36-cuda-tier.md#the-deltanet-layer-on-the-card-q36_dn_gpu1). |
+diff --git a/docs/qwen36-cuda-tier.md b/docs/qwen36-cuda-tier.md
+index 66be220c..a479eb29 100644
+--- a/docs/qwen36-cuda-tier.md
++++ b/docs/qwen36-cuda-tier.md
+@@ -161,7 +161,20 @@ ms on the card against 0.306 on the CPU) the tier with a tenth of the experts
+ resident lost decode (9.2 against 10.9 tok/s) and prefill (14 against 46).
+ `CUDA_EXPERT_GB=<GB>` keeps them on the device. Only the automatic
+ placement is questioned: a hand-written `COLI_PLACE` stands, and
+-`COLI_TRUNK_PROBE=0` skips the probe. The pricing rule:
++`COLI_TRUNK_PROBE=0` skips the probe.
++
++The probe warms the card for `COLI_TRUNK_PROBE_WARM_MS` (250) before it times
++anything, so a laptop GPU is not measured in its idle clock state. It also
++times a tiny [8 x 256] GEMV to get the synchronous round trip (launch, copies,
++WDDM). When the CUDA chain will run, meaning `COLI_CUDA_CHAIN` is not `0` and
++every projection, shared expert and the lm_head were placed on the probed card,
++the trunk's verdict spreads that round trip over
++`COLI_TRUNK_PROBE_PER_SYNC` (4) GEMVs, because the chain syncs once per layer
++and not once per matrix. The experts keep the plain synchronous verdict
++(#2211). On a 4 GB laptop card a GEMV that loses only by its round trip
++therefore keeps the trunk in VRAM. This is the expected outcome; nobody has
++measured it on such a card yet. `COLI_TRUNK_PROBE_PER_SYNC=1` restores the
++old verdict. The pricing rule:
+ 
+ - a dense component is read every token: 1.0 per byte;
+ - a routed expert is read with the probability a token routes to it -- its heat
+-- 
+2.53.0.windows.3
+

@@ -1,0 +1,11 @@
+{
+  "build": [{"cwd": "c", "argv": ["make", "qwen36"]}],
+  "tests": [
+    {"pattern": "c/tests/test_*.py", "cwd": "c", "steps": [["python", "-m", "unittest", "tests.{stem}"]]},
+    {"pattern": "c/tests/test_*.c", "cwd": "c", "steps": [["make", "tests/{stem}"], ["./tests/{stem}"]]},
+    {"pattern": "agent/tests/test_*.py", "cwd": "agent", "steps": [["python", "-m", "unittest", "tests.{stem}"]]},
+    {"pattern": "tests/test_*.py", "cwd": ".", "steps": [["python", "-m", "unittest", "tests.{stem}"]]}
+  ],
+  "full": [{"cwd": "agent", "argv": ["python", "-m", "unittest", "discover", "-s", "tests"]}],
+  "always": []
+}

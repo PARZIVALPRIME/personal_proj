@@ -1,0 +1,11 @@
+﻿{
+    "vram_mib":  4096,
+    "executable":  "C:\\Users\\riyaz\\AppData\\Local\\colibri\\runtime\\colibri-v2.1.0\\qwen36.exe",
+    "cuda_toolkit":  "nvcc missing",
+    "msvc":  "cl missing",
+    "timestamp":  "2026-11-02T20:31:28.0492803+05:30",
+    "model":  "D:\\colibri-models\\qwen36-35b",
+    "repository":  "D:\\colibri-main\\colibri-main",
+    "gpu":  "NVIDIA GeForce RTX 3050 Laptop GPU",
+    "git":  "not a git repository at repository path"
+}

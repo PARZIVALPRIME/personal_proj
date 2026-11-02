@@ -1,0 +1,2210 @@
+From fb9878f7db97a27d729654a017fbb6520a80f3f9 Mon Sep 17 00:00:00 2001
+From: MOHAMMAD <mohamrib@novartis.net>
+Date: Mon, 2 Nov 2026 12:46:06 +0530
+Subject: [PATCH 3/4] agent: coliagent, a gated coding agent; docs: qwen36 on a
+ 4 GB laptop
+
+coliagent (agent/, stdlib only): frozen permission policy (no push, no
+remote, network off, protected paths), argv-only tool runner, git and
+worktrees, repo index with symbols and the import/include graph, atomic
+exact-match patches, validated plans, OpenAI-compatible backend for a
+local coli serve, log diagnostics, test selection from changed files,
+evidence-backed claims, and a self-improvement cycle that tests one
+hypothesis in an isolated worktree behind regression gates and a metric,
+keeps accepted work on a local branch and never merges or pushes.
+
+docs/q36-rtx3050-engineering.md: architecture map, root causes and fixes,
+planner usage, knobs, a survey of other SSD-streaming MoE projects, a
+prioritized backlog and a validation protocol for the target laptop.
+
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+---
+ agent/README.md                 |  68 ++++++++
+ agent/coliagent/__init__.py     |  17 ++
+ agent/coliagent/__main__.py     |   5 +
+ agent/coliagent/cli.py          | 207 +++++++++++++++++++++++++
+ agent/coliagent/diagnose.py     |  88 +++++++++++
+ agent/coliagent/index.py        | 176 +++++++++++++++++++++
+ agent/coliagent/llm.py          |  59 +++++++
+ agent/coliagent/orchestrate.py  | 133 ++++++++++++++++
+ agent/coliagent/patch.py        | 133 ++++++++++++++++
+ agent/coliagent/permissions.py  | 130 ++++++++++++++++
+ agent/coliagent/planner.py      | 134 ++++++++++++++++
+ agent/coliagent/repo.py         |  96 ++++++++++++
+ agent/coliagent/selfimprove.py  | 176 +++++++++++++++++++++
+ agent/coliagent/state.py        | 122 +++++++++++++++
+ agent/coliagent/tools.py        |  80 ++++++++++
+ agent/examples/colibri.json     |  11 ++
+ agent/tests/test_coliagent.py   | 266 ++++++++++++++++++++++++++++++++
+ docs/q36-rtx3050-engineering.md | 139 +++++++++++++++++
+ 18 files changed, 2040 insertions(+)
+ create mode 100644 agent/README.md
+ create mode 100644 agent/coliagent/__init__.py
+ create mode 100644 agent/coliagent/__main__.py
+ create mode 100644 agent/coliagent/cli.py
+ create mode 100644 agent/coliagent/diagnose.py
+ create mode 100644 agent/coliagent/index.py
+ create mode 100644 agent/coliagent/llm.py
+ create mode 100644 agent/coliagent/orchestrate.py
+ create mode 100644 agent/coliagent/patch.py
+ create mode 100644 agent/coliagent/permissions.py
+ create mode 100644 agent/coliagent/planner.py
+ create mode 100644 agent/coliagent/repo.py
+ create mode 100644 agent/coliagent/selfimprove.py
+ create mode 100644 agent/coliagent/state.py
+ create mode 100644 agent/coliagent/tools.py
+ create mode 100644 agent/examples/colibri.json
+ create mode 100644 agent/tests/test_coliagent.py
+ create mode 100644 docs/q36-rtx3050-engineering.md
+
+diff --git a/agent/README.md b/agent/README.md
+new file mode 100644
+index 00000000..c675dc35
+--- /dev/null
++++ b/agent/README.md
+@@ -0,0 +1,68 @@
++# coliagent
++
++A small, inspectable coding-agent framework for this repository. It uses only the
++standard library (Python 3.9+). Every action goes through a frozen permission
++policy, and every result is recorded.
++
++```powershell
++cd agent
++python -m coliagent index --symbol qwen36_cap_for_ram      # where is it defined
++python -m coliagent index --dependents c/qwen36.c          # what includes it
++python -m coliagent tests --config examples/colibri.json   # tests for the working-tree changes
++python -m coliagent tests --config examples/colibri.json --run --state ..\.git\coliagent\state.json --claim cap-fix
++python -m coliagent diagnose build.log                     # gcc/clang/MSVC/ld/Python/unittest/pytest
++python -m coliagent plan --file plan.json                  # validate a plan, list ready steps
++python -m coliagent plan "speed up decode"                 # ask a local model (coli serve) for a plan
++python -m coliagent patch change.json                      # preview a JSON patch; --apply to write
++python -m coliagent improve --patch change.json --hypothesis "..." `
++    --gate '["python","-m","unittest","tests.test_q36_target_plan"]' `
++    --metric "tok/s" --metric-argv '["python","bench.py"]' --metric-regex "tok/s: ([\d.]+)"
++python -m coliagent ledger
++```
++
++## Modules
++
++| Module | Role |
++|---|---|
++| `permissions` | `Policy`: allowed commands, no shell strings, no `git push`/`remote`, network off by default. Writes stay inside the repo and the write roots, never to protected paths or secret-looking files. |
++| `tools` | `ToolRunner`: argv-only execution with timeout and output cap. Every `CommandResult` is logged. |
++| `repo` | Git status, diff, files, commit (with the Co-authored-by trailer) and worktrees. There is no push. |
++| `index` | File inventory, regex symbols (Python, C/C++, JS/TS), text search, and the Python import / C `#include` graph with transitive dependents. |
++| `patch` | Exact-match edits. Each edit's old text must occur once. All-or-nothing across files, CRLF-safe, with a unified diff. |
++| `planner` | Steps with dependencies, topological order, ready set. Model proposals are validated before use. |
++| `llm` | OpenAI-compatible client (default `http://127.0.0.1:8000/v1`, i.e. a local `coli serve`; `COLIAGENT_BASE_URL`/`COLIAGENT_MODEL`/`COLIAGENT_API_KEY`), plus a scripted backend for tests. |
++| `diagnose` | Turns build and test logs into structured diagnostics. |
++| `orchestrate` | Build/test runs from a JSON config, and test selection from changed files (changed tests, transitive dependents, name match). |
++| `state` | Claims move up proposed → applied → built → tested → perf-verified. Each rung needs the matching evidence (a diff, passing runs, baseline and candidate samples). |
++| `selfimprove` | One hypothesis, one patch, one isolated worktree (see below). |
++
++## The self-improvement cycle
++
++1. Refuse patches that touch protected paths: `permissions.py`, `selfimprove.py`, `.git/`, `.github/`. The agent cannot loosen its own rules or its own gate.
++2. Create a fresh worktree on branch `agent/improve-<id>` (in the temp dir), leaving the main checkout untouched.
++3. Measure the baseline metric there (median of `--repeats`).
++4. Apply the patch, then run every gate. If any gate fails, reject.
++5. Measure again. Reject unless the median moved by at least `--min-gain` in the right direction.
++6. If accepted, commit to the branch and keep the branch for review. If rejected, delete the branch. The worktree is always removed, and each outcome is appended to `.git/coliagent/ledger.jsonl`.
++
++The cycle never merges and never pushes. Promoting a branch is a human decision.
++
++Python bytecode is disabled inside the worktree. Without that, a patch that keeps a
++file's size and lands in the same mtime second would run the baseline's stale `.pyc`.
++
++## Tests
++
++```powershell
++cd agent; python -m unittest discover -s tests
++```
++
++The tests build throwaway git repositories in the temp dir and cover:
++
++- policy denials;
++- atomic patches;
++- index and dependents;
++- plan validation;
++- log parsing;
++- test selection;
++- evidence rules;
++- an accepted cycle, plus rejections for a regression, a gate failure and a protected path.
+diff --git a/agent/coliagent/__init__.py b/agent/coliagent/__init__.py
+new file mode 100644
+index 00000000..df643beb
+--- /dev/null
++++ b/agent/coliagent/__init__.py
+@@ -0,0 +1,17 @@
++"""coliagent: a modular, inspectable coding-agent framework (stdlib only).
++
++Modules:
++  permissions  what the agent may run and write (frozen; never self-modified)
++  tools        argv execution under the policy, every result recorded
++  repo         git status/diff/worktree/commit; no push, by design
++  index        file inventory, symbols, text search, include/import graph
++  patch        exact, all-or-nothing multi-file edits and unified diffs
++  planner      steps with dependencies; an LLM may propose, the structure checks
++  llm          backends: any OpenAI-compatible server (a local Colibri), or scripted
++  diagnose     compiler/test log parsing into structured diagnostics
++  orchestrate  build/test runs, test selection from changed files
++  state        explicit project state and evidence-backed claims
++  selfimprove  controlled improvement cycle in an isolated worktree
++"""
++
++__version__ = "0.1.0"
+diff --git a/agent/coliagent/__main__.py b/agent/coliagent/__main__.py
+new file mode 100644
+index 00000000..dd8a8c90
+--- /dev/null
++++ b/agent/coliagent/__main__.py
+@@ -0,0 +1,5 @@
++import sys
++
++from .cli import main
++
++sys.exit(main())
+diff --git a/agent/coliagent/cli.py b/agent/coliagent/cli.py
+new file mode 100644
+index 00000000..1c257c58
+--- /dev/null
++++ b/agent/coliagent/cli.py
+@@ -0,0 +1,207 @@
++"""Command line: python -m coliagent <command> (run from agent/ or with agent/ on PYTHONPATH)."""
++from __future__ import annotations
++
++import argparse
++import json
++import sys
++from pathlib import Path
++from typing import List, Optional
++
++from . import diagnose, patch as patchmod, planner
++from .index import RepoIndex
++from .orchestrate import Orchestrator, load_config
++from .permissions import Policy
++from .repo import RepoManager
++from .selfimprove import Gate, Hypothesis, ImprovementCycle
++from .state import ProjectState
++from .tools import ToolRunner
++
++
++def _ctx(args):
++    root = str(Path(args.root).resolve())
++    policy = Policy(root=root, allow_network=args.allow_network)
++    runner = ToolRunner(policy)
++    return root, policy, runner
++
++
++def _git_root(start: str) -> str:
++    p = Path(start).resolve()
++    for cand in [p, *p.parents]:
++        if (cand / ".git").exists():
++            return str(cand)
++    return str(p)
++
++
++def cmd_index(args) -> int:
++    root, _, runner = _ctx(args)
++    try:
++        files = RepoManager(runner, root).files()
++    except Exception:
++        files = None
++    idx = RepoIndex(root, files)
++    if args.symbol:
++        for s in idx.find_symbol(args.symbol):
++            print(f"{s.path}:{s.line} {s.kind} {s.name}")
++    elif args.search:
++        for h in idx.search(args.search, regex=args.regex, glob=args.glob):
++            print(f"{h.path}:{h.line}: {h.text}")
++    elif args.dependents:
++        for f in sorted(idx.dependents(args.dependents)):
++            print(f)
++    else:
++        by_ext = {}
++        for f in idx.files:
++            by_ext[Path(f).suffix or "(none)"] = by_ext.get(Path(f).suffix or "(none)", 0) + 1
++        print(f"{len(idx.files)} files")
++        for ext, n in sorted(by_ext.items(), key=lambda kv: -kv[1])[:15]:
++            print(f"  {ext:10} {n}")
++    return 0
++
++
++def cmd_tests(args) -> int:
++    root, _, runner = _ctx(args)
++    repo = RepoManager(runner, root)
++    orch = Orchestrator(runner, root, load_config(root, args.config))
++    changed = args.files or repo.changed_files(args.base)
++    tests = orch.select_tests(changed, RepoIndex(root, repo.files(untracked=True)))
++    if not args.run:
++        print("\n".join(tests) or "(no tests selected)")
++        return 0
++    state = ProjectState.load(args.state) if args.state else None
++    failed = 0
++    all_results = []
++    for run in orch.run_tests(tests):
++        all_results.extend(run.results)
++        print(("PASS " if run.ok else "FAIL ") + run.test)
++        if not run.ok:
++            failed += 1
++            last = run.results[-1] if run.results else None
++            if last is not None:
++                diags = diagnose.errors(last.stdout + "\n" + last.stderr)
++                print(diagnose.summarize(diags) or (last.stdout + last.stderr)[-1500:])
++    if state and args.claim and tests and not failed:
++        state.propose(args.claim, args.claim)
++        state.tested(args.claim, all_results)
++        state.save()
++    return 1 if failed else 0
++
++
++def cmd_diagnose(args) -> int:
++    text = Path(args.log).read_text(encoding="utf-8", errors="replace") if args.log != "-" else sys.stdin.read()
++    print(diagnose.summarize(diagnose.parse(text), limit=args.limit) or "(nothing recognised)")
++    return 0
++
++
++def cmd_plan(args) -> int:
++    if args.file:
++        plan = planner.Plan.from_dict(json.loads(Path(args.file).read_text(encoding="utf-8")))
++    else:
++        from .llm import OpenAICompatible
++        plan = planner.propose(OpenAICompatible(base_url=args.base_url, model=args.model), args.goal)
++    print(plan.to_json())
++    print("ready:", ", ".join(s.id for s in plan.ready()) or "(none)", file=sys.stderr)
++    return 0
++
++
++def cmd_patch(args) -> int:
++    root, policy, _ = _ctx(args)
++    p = patchmod.Patch.from_dict(json.loads(Path(args.file).read_text(encoding="utf-8")))
++    if args.apply:
++        print(patchmod.apply(p, root, policy), end="")
++    else:
++        print(patchmod.unified_diff(patchmod.plan(p, root, policy)), end="")
++    return 0
++
++
++def cmd_improve(args) -> int:
++    root, policy, runner = _ctx(args)
++    repo = RepoManager(runner, root)
++    p = patchmod.Patch.from_dict(json.loads(Path(args.patch).read_text(encoding="utf-8")))
++    gates = [Gate(json.loads(g)) for g in args.gate]
++    if not gates:
++        print("refusing to run without at least one --gate (a JSON argv list)", file=sys.stderr)
++        return 2
++    h = Hypothesis(args.hypothesis, metric=args.metric, metric_argv=json.loads(args.metric_argv) if args.metric_argv else None,
++                   metric_regex=args.metric_regex, metric_cwd=args.metric_cwd, lower_is_better=args.lower_is_better,
++                   min_gain=args.min_gain, repeats=args.repeats)
++    out = ImprovementCycle(repo, policy, gates).run(h, p, args.id)
++    print(json.dumps({k: v for k, v in out.__dict__.items() if k != "diff"}, indent=2))
++    return 0 if out.accepted else 1
++
++
++def cmd_ledger(args) -> int:
++    root, policy, runner = _ctx(args)
++    for rec in ImprovementCycle(RepoManager(runner, root), policy, []).history():
++        mark = "ACCEPT" if rec["accepted"] else "reject"
++        print(f"{rec['at']} {mark} {rec['id']} {rec['hypothesis']['statement']} :: {rec['reason'].splitlines()[0]}")
++    return 0
++
++
++def cmd_state(args) -> int:
++    print(ProjectState.load(args.state).report())
++    return 0
++
++
++def main(argv: Optional[List[str]] = None) -> int:
++    ap = argparse.ArgumentParser(prog="coliagent", description=__doc__)
++    ap.add_argument("--root", default=_git_root("."), help="repository root (default: enclosing git repo)")
++    ap.add_argument("--allow-network", action="store_true", help="allow fetch/install commands")
++    sub = ap.add_subparsers(dest="cmd", required=True)
++
++    s = sub.add_parser("index", help="inventory, symbol lookup, search, dependents")
++    s.add_argument("--symbol")
++    s.add_argument("--search")
++    s.add_argument("--regex", action="store_true")
++    s.add_argument("--glob")
++    s.add_argument("--dependents", nargs="+")
++    s.set_defaults(fn=cmd_index)
++
++    s = sub.add_parser("tests", help="select (and optionally run) tests for the changed files")
++    s.add_argument("files", nargs="*")
++    s.add_argument("--base", help="compare against this revision instead of the working tree")
++    s.add_argument("--config")
++    s.add_argument("--run", action="store_true")
++    s.add_argument("--state", help="project state JSON to record a tested claim into")
++    s.add_argument("--claim")
++    s.set_defaults(fn=cmd_tests)
++
++    s = sub.add_parser("diagnose", help="parse a build/test log ('-' for stdin)")
++    s.add_argument("log")
++    s.add_argument("--limit", type=int, default=40)
++    s.set_defaults(fn=cmd_diagnose)
++
++    s = sub.add_parser("plan", help="validate a plan file, or ask a model for one")
++    s.add_argument("goal", nargs="?", default="")
++    s.add_argument("--file")
++    s.add_argument("--base-url")
++    s.add_argument("--model")
++    s.set_defaults(fn=cmd_plan)
++
++    s = sub.add_parser("patch", help="preview (default) or --apply a JSON patch")
++    s.add_argument("file")
++    s.add_argument("--apply", action="store_true")
++    s.set_defaults(fn=cmd_patch)
++
++    s = sub.add_parser("improve", help="run one gated improvement cycle in an isolated worktree")
++    s.add_argument("--patch", required=True)
++    s.add_argument("--hypothesis", required=True)
++    s.add_argument("--gate", action="append", default=[], help='JSON argv, e.g. \'["python","-m","unittest"]\'')
++    s.add_argument("--metric")
++    s.add_argument("--metric-argv")
++    s.add_argument("--metric-regex", default=r"([-+]?\d+(?:\.\d+)?)")
++    s.add_argument("--metric-cwd", default=".")
++    s.add_argument("--lower-is-better", action="store_true")
++    s.add_argument("--min-gain", type=float, default=0.02)
++    s.add_argument("--repeats", type=int, default=3)
++    s.add_argument("--id")
++    s.set_defaults(fn=cmd_improve)
++
++    s = sub.add_parser("ledger", help="show the improvement ledger")
++    s.set_defaults(fn=cmd_ledger)
++
++    s = sub.add_parser("state", help="show evidence-backed claims")
++    s.add_argument("state")
++    s.set_defaults(fn=cmd_state)
++
++    args = ap.parse_args(argv)
++    return args.fn(args)
+diff --git a/agent/coliagent/diagnose.py b/agent/coliagent/diagnose.py
+new file mode 100644
+index 00000000..f0423f08
+--- /dev/null
++++ b/agent/coliagent/diagnose.py
+@@ -0,0 +1,88 @@
++"""Compiler and test log parsing into structured diagnostics."""
++from __future__ import annotations
++
++import re
++from dataclasses import dataclass
++from typing import List, Optional
++
++
++@dataclass(frozen=True)
++class Diagnostic:
++    tool: str
++    severity: str  # error | warning | note | fail
++    path: Optional[str]
++    line: Optional[int]
++    col: Optional[int]
++    message: str
++
++
++_GCC = re.compile(r"^(?P<path>[^\s:][^:]*?|[A-Za-z]:[^:]+?):(?P<line>\d+):(?:(?P<col>\d+):)?\s*"
++                  r"(?P<sev>fatal error|error|warning|note):\s*(?P<msg>.+)$")
++_MSVC = re.compile(r"^(?P<path>[^()]+)\((?P<line>\d+)(?:,(?P<col>\d+))?\)\s*:\s*"
++                   r"(?P<sev>fatal error|error|warning)\s+(?P<code>[A-Z]+\d+)\s*:\s*(?P<msg>.+)$")
++_LD = re.compile(r"(?:undefined reference to|unresolved external symbol)\s*[`'\"]?(?P<sym>[^`'\"\s]+)")
++_PY_FRAME = re.compile(r'^\s*File "(?P<path>[^"]+)", line (?P<line>\d+)')
++_PY_EXC = re.compile(r"^(?P<exc>[A-Za-z_][\w.]*(?:Error|Exception|Exit|Interrupt|Warning)|AssertionError)(?::\s*(?P<msg>.*))?$")
++_UNITTEST = re.compile(r"^(?P<kind>FAIL|ERROR):\s+(?P<test>\S+)\s+\((?P<cls>[^)]+)\)")
++_PYTEST = re.compile(r"^FAILED\s+(?P<id>\S+?)(?:\s+-\s+(?P<msg>.*))?$")
++_CTEST = re.compile(r"^\s*FAIL[:\s]+(?P<msg>.+)$")
++
++
++def parse(log: str) -> List[Diagnostic]:
++    out: List[Diagnostic] = []
++    last_frame = None
++    for raw in log.splitlines():
++        line = raw.rstrip()
++        m = _MSVC.match(line)
++        if m:
++            sev = "error" if "error" in m["sev"] else "warning"
++            out.append(Diagnostic("msvc", sev, m["path"].strip(), int(m["line"]),
++                                  int(m["col"]) if m["col"] else None, f"{m['code']}: {m['msg']}"))
++            continue
++        m = _GCC.match(line)
++        if m:
++            sev = "error" if "error" in m["sev"] else m["sev"]
++            out.append(Diagnostic("cc", sev, m["path"], int(m["line"]),
++                                  int(m["col"]) if m["col"] else None, m["msg"]))
++            continue
++        m = _LD.search(line)
++        if m:
++            out.append(Diagnostic("ld", "error", None, None, None, f"unresolved symbol {m['sym']}"))
++            continue
++        m = _PY_FRAME.match(line)
++        if m:
++            last_frame = (m["path"], int(m["line"]))
++            continue
++        m = _UNITTEST.match(line)
++        if m:
++            out.append(Diagnostic("unittest", "fail", None, None, None, f"{m['kind']} {m['cls']}.{m['test']}"))
++            continue
++        m = _PYTEST.match(line)
++        if m:
++            out.append(Diagnostic("pytest", "fail", m["id"].split("::")[0], None, None,
++                                  f"{m['id']}" + (f": {m['msg']}" if m["msg"] else "")))
++            continue
++        m = _PY_EXC.match(line)
++        if m and last_frame:
++            out.append(Diagnostic("python", "error", last_frame[0], last_frame[1], None,
++                                  m["exc"] + (f": {m['msg']}" if m["msg"] else "")))
++            last_frame = None
++            continue
++        m = _CTEST.match(line)
++        if m and not line.lstrip().startswith("FAILED"):
++            out.append(Diagnostic("test", "fail", None, None, None, m["msg"].strip()))
++    return out
++
++
++def errors(log: str) -> List[Diagnostic]:
++    return [d for d in parse(log) if d.severity in ("error", "fail")]
++
++
++def summarize(diags: List[Diagnostic], limit: int = 20) -> str:
++    lines = []
++    for d in diags[:limit]:
++        loc = f"{d.path}:{d.line}" if d.path and d.line else (d.path or "-")
++        lines.append(f"[{d.tool} {d.severity}] {loc} {d.message}")
++    if len(diags) > limit:
++        lines.append(f"... {len(diags) - limit} more")
++    return "\n".join(lines)
+diff --git a/agent/coliagent/index.py b/agent/coliagent/index.py
+new file mode 100644
+index 00000000..8fcb26bf
+--- /dev/null
++++ b/agent/coliagent/index.py
+@@ -0,0 +1,176 @@
++"""Repository index: inventory, symbols, text search, include/import graph.
++
++Regex based on purpose: it is fast, dependency free, and good enough to point
++the agent (or a person) at the right file. It is not a compiler front end.
++"""
++from __future__ import annotations
++
++import os
++import re
++from collections import defaultdict
++from dataclasses import dataclass
++from pathlib import Path
++from typing import Dict, Iterable, List, Optional, Set
++
++SKIP_DIRS = {".git", "__pycache__", "node_modules", "build", "dist", ".venv", "venv", ".mypy_cache", ".pytest_cache"}
++TEXT_EXT = {".py", ".c", ".h", ".cc", ".cpp", ".hpp", ".cu", ".js", ".ts", ".tsx", ".go", ".rs", ".md",
++            ".txt", ".toml", ".json", ".yml", ".yaml", ".ps1", ".sh", ".cmake", ""}
++MAX_BYTES = 4 * 1024 * 1024
++
++_SYM = {
++    ".py": [(re.compile(r"^\s*def\s+([A-Za-z_]\w*)\s*\(", re.M), "function"),
++            (re.compile(r"^\s*class\s+([A-Za-z_]\w*)", re.M), "class")],
++    ".c": [(re.compile(r"^(?!\s)(?:static\s+|inline\s+|extern\s+)*[A-Za-z_][\w\s\*]*?\b([A-Za-z_]\w*)\s*\([^;{]*\)\s*\{", re.M), "function"),
++           (re.compile(r"^\s*#\s*define\s+([A-Za-z_]\w*)", re.M), "macro"),
++           (re.compile(r"^\s*typedef\s+struct\s*\w*\s*\{[^}]*\}\s*([A-Za-z_]\w*)\s*;", re.M | re.S), "type")],
++    ".js": [(re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_$][\w$]*)", re.M), "function"),
++            (re.compile(r"^\s*(?:export\s+)?class\s+([A-Za-z_$][\w$]*)", re.M), "class")],
++}
++_SYM[".h"] = _SYM[".c"] + [(re.compile(r"^[A-Za-z_][\w\s\*]*?\b([A-Za-z_]\w*)\s*\([^;{]*\)\s*;", re.M), "prototype")]
++_SYM[".cu"] = _SYM[".cc"] = _SYM[".cpp"] = _SYM[".c"]
++_SYM[".ts"] = _SYM[".tsx"] = _SYM[".js"]
++_C_KEYWORDS = {"if", "for", "while", "switch", "return", "sizeof", "else", "do"}
++
++_PY_IMPORT = re.compile(r"^\s*(?:from\s+([\w.]+)\s+import\s+(\([^)]*\)|[^\n#]+)|import\s+([\w.]+))", re.M)
++_C_INCLUDE = re.compile(r'^\s*#\s*include\s+"([^"]+)"', re.M)
++
++
++@dataclass(frozen=True)
++class Symbol:
++    name: str
++    kind: str
++    path: str
++    line: int
++
++
++@dataclass(frozen=True)
++class Hit:
++    path: str
++    line: int
++    text: str
++
++
++class RepoIndex:
++    def __init__(self, root: str, files: Optional[Iterable[str]] = None):
++        self.root = Path(root).resolve()
++        self.files: List[str] = sorted(files) if files is not None else self._walk()
++        self._text: Dict[str, str] = {}
++
++    def _walk(self) -> List[str]:
++        out = []
++        for d, dirs, names in os.walk(self.root):
++            dirs[:] = [x for x in dirs if x not in SKIP_DIRS]
++            for n in names:
++                out.append((Path(d) / n).relative_to(self.root).as_posix())
++        return sorted(out)
++
++    def text(self, rel: str) -> str:
++        if rel not in self._text:
++            p = self.root / rel
++            if Path(rel).suffix.lower() not in TEXT_EXT or not p.is_file() or p.stat().st_size > MAX_BYTES:
++                self._text[rel] = ""
++            else:
++                try:
++                    self._text[rel] = p.read_text(encoding="utf-8", errors="replace")
++                except OSError:
++                    self._text[rel] = ""
++        return self._text[rel]
++
++    def symbols(self, rel: Optional[str] = None) -> List[Symbol]:
++        out: List[Symbol] = []
++        for f in [rel] if rel else self.files:
++            pats = _SYM.get(Path(f).suffix.lower())
++            if not pats:
++                continue
++            src = self.text(f)
++            for rx, kind in pats:
++                for m in rx.finditer(src):
++                    name = m.group(1)
++                    if name in _C_KEYWORDS:
++                        continue
++                    out.append(Symbol(name, kind, f, src.count("\n", 0, m.start(1)) + 1))
++        return sorted(out, key=lambda s: (s.path, s.line))
++
++    def find_symbol(self, name: str) -> List[Symbol]:
++        return [s for s in self.symbols() if s.name == name]
++
++    def search(self, pattern: str, regex: bool = False, glob: Optional[str] = None, limit: int = 200) -> List[Hit]:
++        rx = re.compile(pattern if regex else re.escape(pattern))
++        hits: List[Hit] = []
++        for f in self.files:
++            if glob and not Path(f).match(glob):
++                continue
++            for i, line in enumerate(self.text(f).splitlines(), 1):
++                if rx.search(line):
++                    hits.append(Hit(f, i, line.strip()[:240]))
++                    if len(hits) >= limit:
++                        return hits
++        return hits
++
++    def dependency_graph(self) -> Dict[str, Set[str]]:
++        """file -> files in the repository it imports or includes."""
++        by_module: Dict[str, str] = {}
++        by_name: Dict[str, List[str]] = defaultdict(list)
++        for f in self.files:
++            p = Path(f)
++            if p.suffix == ".py":
++                parts = list(p.with_suffix("").parts)
++                if parts[-1] == "__init__":
++                    parts = parts[:-1]
++                for i in range(len(parts)):
++                    by_module.setdefault(".".join(parts[i:]), f)
++            by_name[p.name].append(f)
++        graph: Dict[str, Set[str]] = {}
++        for f in self.files:
++            suf = Path(f).suffix.lower()
++            deps: Set[str] = set()
++            src = self.text(f)
++            if suf == ".py":
++                for m in _PY_IMPORT.finditer(src):
++                    if m.group(1):
++                        names = [part.split()[0] for part in m.group(2).strip("() \t").replace("\n", " ").split(",")
++                                 if part.split()]
++                        mods = [f"{m.group(1)}.{n}" for n in names] + [m.group(1)]
++                    else:
++                        mods = [m.group(3)]
++                    for k, mod in enumerate(mods):
++                        # "from pkg import sub" names a submodule when one exists
++                        exact = by_module.get(mod)
++                        if exact:
++                            deps.add(exact)
++                            continue
++                        if k != len(mods) - 1:
++                            continue
++                        while mod:
++                            if mod in by_module:
++                                deps.add(by_module[mod])
++                                break
++                            mod = mod.rpartition(".")[0]
++            elif suf in (".c", ".h", ".cc", ".cpp", ".cu", ".hpp"):
++                here = Path(f).parent
++                for m in _C_INCLUDE.finditer(src):
++                    inc = m.group(1)
++                    cand = os.path.normpath(here / inc).replace("\\", "/")
++                    if cand in self.files:
++                        deps.add(cand)
++                    elif len(by_name.get(Path(inc).name, [])) == 1:
++                        deps.add(by_name[Path(inc).name][0])
++            deps.discard(f)
++            graph[f] = deps
++        return graph
++
++    def dependents(self, changed: Iterable[str]) -> Set[str]:
++        """Every file that transitively imports or includes one of ``changed``."""
++        rev: Dict[str, Set[str]] = defaultdict(set)
++        for f, deps in self.dependency_graph().items():
++            for d in deps:
++                rev[d].add(f)
++        seen: Set[str] = set()
++        stack = list(changed)
++        while stack:
++            cur = stack.pop()
++            for nxt in rev.get(cur, ()):
++                if nxt not in seen:
++                    seen.add(nxt)
++                    stack.append(nxt)
++        return seen
+diff --git a/agent/coliagent/llm.py b/agent/coliagent/llm.py
+new file mode 100644
+index 00000000..c0bd868d
+--- /dev/null
++++ b/agent/coliagent/llm.py
+@@ -0,0 +1,59 @@
++"""Model backends.
++
++``OpenAICompatible`` talks to any /v1/chat/completions server; the default URL
++is a local Colibri gateway (``coli serve``), so the agent can run entirely on
++the machine it is improving. ``ScriptedBackend`` replays canned replies for
++tests and dry runs.
++"""
++from __future__ import annotations
++
++import json
++import os
++import urllib.error
++import urllib.request
++from typing import Dict, Iterable, List, Optional
++
++
++class LLMError(Exception):
++    pass
++
++
++class OpenAICompatible:
++    def __init__(self, base_url: Optional[str] = None, model: Optional[str] = None,
++                 api_key: Optional[str] = None, timeout: float = 600.0,
++                 temperature: float = 0.2, max_tokens: int = 2048):
++        self.base_url = (base_url or os.environ.get("COLIAGENT_BASE_URL") or "http://127.0.0.1:8000/v1").rstrip("/")
++        self.model = model or os.environ.get("COLIAGENT_MODEL") or "colibri"
++        self.api_key = api_key if api_key is not None else os.environ.get("COLIAGENT_API_KEY", "")
++        self.timeout = timeout
++        self.temperature = temperature
++        self.max_tokens = max_tokens
++
++    def complete(self, messages: List[Dict[str, str]], **kw) -> str:
++        body = {"model": self.model, "messages": messages, "temperature": kw.get("temperature", self.temperature),
++                "max_tokens": kw.get("max_tokens", self.max_tokens), "stream": False}
++        req = urllib.request.Request(self.base_url + "/chat/completions", data=json.dumps(body).encode(),
++                                     headers={"Content-Type": "application/json"}, method="POST")
++        if self.api_key:
++            req.add_header("Authorization", "Bearer " + self.api_key)
++        try:
++            with urllib.request.urlopen(req, timeout=self.timeout) as r:
++                data = json.loads(r.read().decode("utf-8"))
++        except (urllib.error.URLError, OSError, ValueError) as e:
++            raise LLMError(f"{self.base_url}: {e}") from e
++        try:
++            return data["choices"][0]["message"]["content"] or ""
++        except (KeyError, IndexError, TypeError) as e:
++            raise LLMError(f"unexpected reply shape: {str(data)[:200]}") from e
++
++
++class ScriptedBackend:
++    def __init__(self, replies: Iterable[str]):
++        self.replies = list(replies)
++        self.calls: List[List[Dict[str, str]]] = []
++
++    def complete(self, messages: List[Dict[str, str]], **kw) -> str:
++        self.calls.append(messages)
++        if not self.replies:
++            raise LLMError("scripted backend has no replies left")
++        return self.replies.pop(0)
+diff --git a/agent/coliagent/orchestrate.py b/agent/coliagent/orchestrate.py
+new file mode 100644
+index 00000000..00790c6e
+--- /dev/null
++++ b/agent/coliagent/orchestrate.py
+@@ -0,0 +1,133 @@
++"""Build and test orchestration, with test selection from changed files.
++
++Project knowledge lives in a small JSON config rather than in code:
++
++    {
++      "build": [{"cwd": "c", "argv": ["make", "qwen36"]}],
++      "tests": [
++        {"pattern": "c/tests/test_*.py", "cwd": "c",
++         "steps": [["python", "-m", "unittest", "tests.{stem}"]]},
++        {"pattern": "c/tests/test_*.c", "cwd": "c",
++         "steps": [["make", "tests/{stem}"], ["./tests/{stem}"]]}
++      ],
++      "full": [{"cwd": ".", "argv": ["python", "-m", "unittest", "discover"]}],
++      "always": ["c/tests/test_openai_server.py"]
++    }
++
++A test is selected when it changed, when it imports/includes a changed file
++(transitively), or when its name mentions a changed file's stem.
++"""
++from __future__ import annotations
++
++import fnmatch
++import json
++import re
++from dataclasses import dataclass, field
++from pathlib import Path, PurePosixPath
++from typing import Dict, Iterable, List, Optional
++
++from .index import RepoIndex
++from .tools import CommandResult, ToolRunner
++
++DEFAULT_CONFIG: Dict = {
++    "build": [],
++    "tests": [{"pattern": "tests/test_*.py", "cwd": ".", "steps": [["python", "-m", "unittest", "tests.{stem}"]]},
++              {"pattern": "**/tests/test_*.py", "cwd": "{parent2}",
++               "steps": [["python", "-m", "unittest", "tests.{stem}"]]}],
++    "full": [{"cwd": ".", "argv": ["python", "-m", "unittest", "discover"]}],
++    "always": [],
++}
++
++
++def load_config(root: str, path: Optional[str] = None) -> Dict:
++    p = Path(path) if path else Path(root) / ".coliagent.json"
++    if p.is_file():
++        cfg = json.loads(p.read_text(encoding="utf-8"))
++        merged = dict(DEFAULT_CONFIG)
++        merged.update(cfg)
++        return merged
++    return dict(DEFAULT_CONFIG)
++
++
++def _match(path: str, pattern: str) -> bool:
++    if fnmatch.fnmatch(path, pattern):
++        return True
++    return pattern.startswith("**/") and fnmatch.fnmatch(path, pattern[3:])
++
++
++def _fill(s: str, test: str) -> str:
++    p = PurePosixPath(test)
++    parent2 = p.parent.parent.as_posix() if len(p.parts) > 2 else "."
++    return s.replace("{stem}", p.stem).replace("{path}", test).replace("{parent2}", parent2).replace("{parent}", p.parent.as_posix())
++
++
++@dataclass
++class TestRun:
++    test: str
++    results: List[CommandResult] = field(default_factory=list)
++
++    @property
++    def ok(self) -> bool:
++        return bool(self.results) and all(r.ok for r in self.results)
++
++
++class Orchestrator:
++    def __init__(self, runner: ToolRunner, root: str, config: Optional[Dict] = None):
++        self.runner = runner
++        self.root = Path(root).resolve()
++        self.config = config if config is not None else load_config(root)
++
++    def _spec(self, test: str) -> Optional[Dict]:
++        for spec in self.config.get("tests", []):
++            if _match(test, spec["pattern"]):
++                return spec
++        return None
++
++    def is_test(self, path: str) -> bool:
++        return self._spec(path) is not None
++
++    def select_tests(self, changed: Iterable[str], index: Optional[RepoIndex] = None) -> List[str]:
++        changed = [c.replace("\\", "/") for c in changed]
++        idx = index or RepoIndex(str(self.root))
++        tests = [f for f in idx.files if self.is_test(f)]
++        chosen = {c for c in changed if c in tests}
++        dependents = idx.dependents(changed)
++        chosen.update(t for t in tests if t in dependents)
++        stems = {PurePosixPath(c).stem.lower() for c in changed if not self.is_test(c)}
++        for t in tests:
++            name = PurePosixPath(t).stem.lower()
++            if any(len(s) >= 3 and re.search(rf"(^|_){re.escape(s)}(_|$)", name) for s in stems):
++                chosen.add(t)
++        chosen.update(t for t in self.config.get("always", []) if t in tests)
++        return sorted(chosen)
++
++    def run_test(self, test: str) -> TestRun:
++        spec = self._spec(test)
++        run = TestRun(test)
++        if spec is None:
++            return run
++        cwd = self.root / _fill(spec.get("cwd", "."), test)
++        for step in spec["steps"]:
++            res = self.runner.run([_fill(a, test) for a in step], cwd=str(cwd), timeout=spec.get("timeout"))
++            run.results.append(res)
++            if not res.ok:
++                break
++        return run
++
++    def run_tests(self, tests: Iterable[str]) -> List[TestRun]:
++        return [self.run_test(t) for t in tests]
++
++    def _run_list(self, key: str) -> List[CommandResult]:
++        out = []
++        for item in self.config.get(key, []):
++            res = self.runner.run(item["argv"], cwd=str(self.root / item.get("cwd", ".")), timeout=item.get("timeout"))
++            out.append(res)
++            if not res.ok:
++                break
++        return out
++
++    def build(self) -> List[CommandResult]:
++        return self._run_list("build")
++
++    def full(self) -> List[CommandResult]:
++        return self._run_list("full")
+diff --git a/agent/coliagent/patch.py b/agent/coliagent/patch.py
+new file mode 100644
+index 00000000..eed5ce71
+--- /dev/null
++++ b/agent/coliagent/patch.py
+@@ -0,0 +1,133 @@
++"""Exact, all-or-nothing multi-file edits.
++
++An edit names a file, an exact old string that must occur exactly once, and its
++replacement (an empty old string creates a new file). Every edit of a patch is
++checked against the policy and the current contents before anything is written;
++if a write fails part way, the files already written are restored.
++"""
++from __future__ import annotations
++
++import difflib
++from dataclasses import dataclass, field
++from pathlib import Path
++from typing import Dict, List, Optional
++
++from .permissions import Policy
++
++
++class PatchError(Exception):
++    pass
++
++
++@dataclass(frozen=True)
++class Edit:
++    path: str
++    old: str
++    new: str
++
++
++@dataclass
++class Patch:
++    edits: List[Edit] = field(default_factory=list)
++    description: str = ""
++
++    @property
++    def paths(self) -> List[str]:
++        seen: List[str] = []
++        for e in self.edits:
++            if e.path not in seen:
++                seen.append(e.path)
++        return seen
++
++    @classmethod
++    def from_dict(cls, d: Dict) -> "Patch":
++        edits = [Edit(str(e["path"]), str(e.get("old", "")), str(e["new"])) for e in d.get("edits", [])]
++        return cls(edits, str(d.get("description", "")))
++
++    def to_dict(self) -> Dict:
++        return {"description": self.description,
++                "edits": [{"path": e.path, "old": e.old, "new": e.new} for e in self.edits]}
++
++
++def _read(p: Path) -> Optional[str]:
++    if not p.exists():
++        return None
++    with open(p, "r", encoding="utf-8", newline="") as fh:
++        return fh.read()
++
++
++def _write(p: Path, text: str) -> None:
++    p.parent.mkdir(parents=True, exist_ok=True)
++    with open(p, "w", encoding="utf-8", newline="") as fh:
++        fh.write(text)
++
++
++def plan(patch: Patch, root: str, policy: Optional[Policy] = None) -> Dict[str, tuple]:
++    """Validate and compute {path: (before, after)} without writing anything."""
++    if not patch.edits:
++        raise PatchError("empty patch")
++    base = Path(root)
++    result: Dict[str, tuple] = {}
++    for e in patch.edits:
++        if policy is not None:
++            policy.check_write(base / e.path)
++        before, cur = result.get(e.path, (None, None))
++        if e.path not in result:
++            before = _read(base / e.path)
++            cur = before
++        if e.old == "":
++            if cur is not None:
++                raise PatchError(f"{e.path}: create edit but the file already exists")
++            cur = e.new
++        else:
++            if cur is None:
++                raise PatchError(f"{e.path}: file does not exist")
++            # match on LF so a CRLF file still matches an LF old string
++            crlf = "\r\n" in cur
++            body = cur.replace("\r\n", "\n") if crlf else cur
++            old, new = e.old.replace("\r\n", "\n"), e.new.replace("\r\n", "\n")
++            n = body.count(old)
++            if n != 1:
++                raise PatchError(f"{e.path}: old text matches {n} times (needs exactly 1)")
++            body = body.replace(old, new, 1)
++            cur = body.replace("\n", "\r\n") if crlf else body
++        result[e.path] = (before, cur)
++    return result
++
++
++def apply(patch: Patch, root: str, policy: Optional[Policy] = None) -> str:
++    """Apply atomically; return the unified diff of what changed."""
++    changes = plan(patch, root, policy)
++    base = Path(root)
++    written: List[str] = []
++    try:
++        for path, (_, after) in changes.items():
++            _write(base / path, after)
++            written.append(path)
++    except Exception:
++        for path in written:
++            before = changes[path][0]
++            if before is None:
++                (base / path).unlink(missing_ok=True)
++            else:
++                _write(base / path, before)
++        raise
++    return unified_diff(changes)
++
++
++def revert(changes: Dict[str, tuple], root: str) -> None:
++    base = Path(root)
++    for path, (before, _) in changes.items():
++        if before is None:
++            (base / path).unlink(missing_ok=True)
++        else:
++            _write(base / path, before)
++
++
++def unified_diff(changes: Dict[str, tuple]) -> str:
++    out: List[str] = []
++    for path, (before, after) in changes.items():
++        a = (before or "").splitlines(keepends=True)
++        b = (after or "").splitlines(keepends=True)
++        out.extend(difflib.unified_diff(a, b, "/dev/null" if before is None else f"a/{path}", f"b/{path}"))
++    return "".join(line if line.endswith("\n") else line + "\n" for line in out)
+diff --git a/agent/coliagent/permissions.py b/agent/coliagent/permissions.py
+new file mode 100644
+index 00000000..2f083c5b
+--- /dev/null
++++ b/agent/coliagent/permissions.py
+@@ -0,0 +1,130 @@
++"""What the agent may run and write.
++
++The policy is a frozen value handed to every component that acts. Nothing in
++the agent constructs a wider policy from a narrower one, and the self-improvement
++cycle refuses any change that touches the files listed in ``protected``
++(this module among them), so the agent cannot widen its own permissions.
++"""
++from __future__ import annotations
++
++import fnmatch
++import os
++from dataclasses import dataclass, field
++from pathlib import Path
++from typing import Iterable, Sequence, Tuple
++
++
++class PermissionDenied(Exception):
++    pass
++
++
++DEFAULT_COMMANDS: Tuple[str, ...] = (
++    "git", "python", "python3", "py", "make", "cmake", "ninja", "gcc", "clang", "cc",
++    "zig", "rg", "pytest", "node", "npm", "go", "cargo",
++)
++# git subcommands that publish or rewrite shared history
++DENIED_GIT: Tuple[str, ...] = ("push", "send-email", "request-pull", "remote")
++DEFAULT_PROTECTED: Tuple[str, ...] = (
++    "agent/coliagent/permissions.py", "agent/coliagent/selfimprove.py", ".git/*", ".github/*",
++)
++SECRET_PATTERNS: Tuple[str, ...] = ("*.pem", "*.key", "*id_rsa*", "*.pfx", ".env", "*.env", "*credentials*")
++
++
++@dataclass(frozen=True)
++class Policy:
++    root: str
++    commands: Tuple[str, ...] = DEFAULT_COMMANDS
++    write_roots: Tuple[str, ...] = (".",)
++    protected: Tuple[str, ...] = DEFAULT_PROTECTED
++    allow_network: bool = False
++    max_seconds: float = 1800.0
++    max_output_bytes: int = 200_000
++    allow_repo_binaries: bool = True
++    extra_denied_git: Tuple[str, ...] = field(default_factory=tuple)
++
++    def _rel(self, path: str | os.PathLike) -> str:
++        root = Path(self.root).resolve()
++        p = Path(path)
++        p = (root / p).resolve() if not p.is_absolute() else p.resolve()
++        try:
++            return p.relative_to(root).as_posix()
++        except ValueError:
++            raise PermissionDenied(f"{path} is outside the repository {root}")
++
++    def check_write(self, path: str | os.PathLike) -> str:
++        rel = self._rel(path)
++        name = Path(rel).name
++        if any(fnmatch.fnmatch(rel, pat) for pat in self.protected):
++            raise PermissionDenied(f"{rel} is protected")
++        if any(fnmatch.fnmatch(name, pat) for pat in SECRET_PATTERNS):
++            raise PermissionDenied(f"{rel} looks like a secret")
++        roots = [_norm_root(r) for r in self.write_roots]
++        if not any(r == "" or rel == r or rel.startswith(r + "/") for r in roots):
++            raise PermissionDenied(f"{rel} is outside the write roots {self.write_roots}")
++        return rel
++
++    def check_read(self, path: str | os.PathLike) -> str:
++        rel = self._rel(path)
++        if any(fnmatch.fnmatch(Path(rel).name, pat) for pat in SECRET_PATTERNS):
++            raise PermissionDenied(f"{rel} looks like a secret")
++        return rel
++
++    def check_command(self, argv: Sequence[str]) -> None:
++        if not argv or not isinstance(argv, (list, tuple)):
++            raise PermissionDenied("a command is a non-empty argv list (no shell strings)")
++        exe = Path(argv[0]).name.lower()
++        for suffix in (".exe", ".cmd", ".bat"):
++            if exe.endswith(suffix):
++                exe = exe[: -len(suffix)]
++        if self.allow_repo_binaries and ("/" in argv[0] or "\\" in argv[0]):
++            # a binary the build produced inside the repository (a test runner);
++            # its code is under review anyway, exactly like a Python test file
++            self._rel(argv[0])
++            return
++        if exe not in self.commands:
++            raise PermissionDenied(f"{argv[0]} is not an allowed command")
++        if exe == "git":
++            sub = _git_subcommand(argv[1:])
++            if sub in DENIED_GIT + tuple(self.extra_denied_git):
++                raise PermissionDenied(f"git {sub} is not allowed: the agent never publishes")
++            if sub in ("fetch", "pull", "clone", "ls-remote") and not self.allow_network:
++                raise PermissionDenied(f"git {sub} needs the network, which the policy denies")
++        if exe in ("npm", "pip", "cargo", "go") and not self.allow_network:
++            if any(a in ("install", "add", "get", "fetch", "update") for a in argv[1:3]):
++                raise PermissionDenied(f"{exe} {argv[1]} needs the network, which the policy denies")
++        if exe in ("python", "python3", "py") and not self.allow_network:
++            if len(argv) > 3 and argv[1:3] == ["-m", "pip"] and argv[3] in ("install", "download"):
++                raise PermissionDenied("pip install needs the network, which the policy denies")
++
++    def touches_protected(self, paths: Iterable[str]) -> bool:
++        for p in paths:
++            try:
++                rel = self._rel(p)
++            except PermissionDenied:
++                return True
++            if any(fnmatch.fnmatch(rel, pat) for pat in self.protected):
++                return True
++        return False
++
++
++def _norm_root(r: str) -> str:
++    r = r.replace("\\", "/").strip("/")
++    while r.startswith("./"):
++        r = r[2:]
++    return "" if r in ("", ".") else r
++
++
++def _git_subcommand(args: Sequence[str]) -> str:
++    """The first argument that is not an option or an option's value (-c k=v, -C dir)."""
++    skip = False
++    for a in args:
++        if skip:
++            skip = False
++            continue
++        if a in ("-c", "-C", "--git-dir", "--work-tree", "--namespace"):
++            skip = True
++            continue
++        if a.startswith("-"):
++            continue
++        return a
++    return ""
+diff --git a/agent/coliagent/planner.py b/agent/coliagent/planner.py
+new file mode 100644
+index 00000000..bfd86fb2
+--- /dev/null
++++ b/agent/coliagent/planner.py
+@@ -0,0 +1,134 @@
++"""Task planning with explicit dependencies.
++
++A language model may *propose* a plan (JSON); this module checks its structure
++(unique ids, known dependencies, no cycles) before anything acts on it.
++"""
++from __future__ import annotations
++
++import json
++import re
++from dataclasses import asdict, dataclass, field
++from typing import Dict, List, Optional
++
++STATUSES = ("pending", "in_progress", "done", "blocked", "failed")
++
++
++class PlanError(Exception):
++    pass
++
++
++@dataclass
++class Step:
++    id: str
++    title: str
++    detail: str = ""
++    deps: List[str] = field(default_factory=list)
++    status: str = "pending"
++    files: List[str] = field(default_factory=list)
++    verify: List[List[str]] = field(default_factory=list)  # argv lists that prove the step
++
++
++@dataclass
++class Plan:
++    goal: str
++    steps: List[Step] = field(default_factory=list)
++
++    def by_id(self) -> Dict[str, Step]:
++        return {s.id: s for s in self.steps}
++
++    def validate(self) -> None:
++        ids = [s.id for s in self.steps]
++        if len(set(ids)) != len(ids):
++            raise PlanError("duplicate step ids")
++        known = set(ids)
++        for s in self.steps:
++            if not re.fullmatch(r"[a-z0-9][a-z0-9-]*", s.id):
++                raise PlanError(f"bad step id {s.id!r} (kebab-case)")
++            if s.status not in STATUSES:
++                raise PlanError(f"{s.id}: unknown status {s.status}")
++            for d in s.deps:
++                if d not in known:
++                    raise PlanError(f"{s.id}: unknown dependency {d}")
++            for v in s.verify:
++                if not isinstance(v, list) or not v or not all(isinstance(a, str) for a in v):
++                    raise PlanError(f"{s.id}: verify entries are argv lists")
++        self.order()
++
++    def order(self) -> List[str]:
++        """Topological order; raises on a cycle."""
++        steps = self.by_id()
++        state: Dict[str, int] = {}
++        out: List[str] = []
++
++        def visit(i: str, path: List[str]) -> None:
++            if state.get(i) == 2:
++                return
++            if state.get(i) == 1:
++                raise PlanError("dependency cycle: " + " -> ".join(path + [i]))
++            state[i] = 1
++            for d in steps[i].deps:
++                visit(d, path + [i])
++            state[i] = 2
++            out.append(i)
++
++        for s in self.steps:
++            visit(s.id, [])
++        return out
++
++    def ready(self) -> List[Step]:
++        steps = self.by_id()
++        return [s for s in self.steps if s.status == "pending"
++                and all(steps[d].status == "done" for d in s.deps)]
++
++    def mark(self, step_id: str, status: str) -> None:
++        if status not in STATUSES:
++            raise PlanError(f"unknown status {status}")
++        self.by_id()[step_id].status = status
++
++    def to_json(self) -> str:
++        return json.dumps({"goal": self.goal, "steps": [asdict(s) for s in self.steps]}, indent=2)
++
++    @classmethod
++    def from_dict(cls, d: Dict) -> "Plan":
++        if not isinstance(d, dict) or "steps" not in d:
++            raise PlanError("a plan is an object with a 'steps' list")
++        steps = []
++        for raw in d["steps"]:
++            if not isinstance(raw, dict) or "id" not in raw or "title" not in raw:
++                raise PlanError("each step needs an id and a title")
++            steps.append(Step(id=str(raw["id"]), title=str(raw["title"]), detail=str(raw.get("detail", "")),
++                              deps=[str(x) for x in raw.get("deps", [])], status=str(raw.get("status", "pending")),
++                              files=[str(x) for x in raw.get("files", [])],
++                              verify=[list(map(str, v)) if isinstance(v, list) else v for v in raw.get("verify", [])]))
++        p = cls(str(d.get("goal", "")), steps)
++        p.validate()
++        return p
++
++
++PLAN_PROMPT = """You plan software changes. Reply with JSON only:
++{"goal": str, "steps": [{"id": "kebab-id", "title": str, "detail": str,
++ "deps": [ids], "files": [paths], "verify": [[argv...]]}]}
++Each step must be small, testable, and list the commands that prove it."""
++
++
++def extract_json(text: str) -> Dict:
++    """The first JSON object in a model reply (tolerates ```json fences and chatter)."""
++    m = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.S)
++    candidates = [m.group(1)] if m else []
++    start = text.find("{")
++    if start >= 0:
++        candidates.append(text[start:text.rfind("}") + 1])
++    for c in candidates:
++        try:
++            return json.loads(c)
++        except json.JSONDecodeError:
++            continue
++    raise PlanError("no JSON object in the reply")
++
++
++def propose(llm, goal: str, context: str = "") -> Plan:
++    reply = llm.complete([{"role": "system", "content": PLAN_PROMPT},
++                          {"role": "user", "content": f"Goal: {goal}\n\nContext:\n{context}"}])
++    d = extract_json(reply)
++    d.setdefault("goal", goal)
++    return Plan.from_dict(d)
+diff --git a/agent/coliagent/repo.py b/agent/coliagent/repo.py
+new file mode 100644
+index 00000000..6a6f5b00
+--- /dev/null
++++ b/agent/coliagent/repo.py
+@@ -0,0 +1,96 @@
++"""Git integration through the ToolRunner. There is deliberately no push."""
++from __future__ import annotations
++
++import re
++from dataclasses import dataclass
++from pathlib import Path
++from typing import List, Optional
++
++from .tools import CommandResult, ToolRunner
++
++TRAILER = "Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>"
++
++
++class GitError(Exception):
++    def __init__(self, result: CommandResult):
++        super().__init__(f"{result.summary()}\n{result.stderr.strip()}")
++        self.result = result
++
++
++@dataclass
++class StatusEntry:
++    code: str
++    path: str
++
++
++class RepoManager:
++    def __init__(self, runner: ToolRunner, root: Optional[str] = None):
++        self.runner = runner
++        self.root = str(Path(root or runner.policy.root).resolve())
++
++    def git(self, *args: str, check: bool = True, cwd: Optional[str] = None) -> CommandResult:
++        res = self.runner.run(["git", "-c", "core.quotepath=off", "--no-pager", *args], cwd=cwd or self.root)
++        if check and not res.ok:
++            raise GitError(res)
++        return res
++
++    def head(self) -> str:
++        return self.git("rev-parse", "HEAD").stdout.strip()
++
++    def branch(self) -> str:
++        return self.git("rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
++
++    def status(self) -> List[StatusEntry]:
++        out = self.git("status", "--porcelain=v1", "--untracked-files=all").stdout
++        entries = []
++        for line in out.splitlines():
++            if len(line) > 3:
++                path = line[3:]
++                if " -> " in path:
++                    path = path.split(" -> ", 1)[1]
++                entries.append(StatusEntry(line[:2], path.strip('"')))
++        return entries
++
++    def is_clean(self) -> bool:
++        return not self.status()
++
++    def changed_files(self, base: Optional[str] = None) -> List[str]:
++        if base:
++            out = self.git("diff", "--name-only", f"{base}...HEAD").stdout
++            return [l for l in out.splitlines() if l]
++        return [e.path for e in self.status()]
++
++    def diff(self, base: Optional[str] = None, paths: Optional[List[str]] = None) -> str:
++        args = ["diff"] + ([base] if base else []) + (["--", *paths] if paths else [])
++        return self.git(*args).stdout
++
++    def files(self, untracked: bool = False) -> List[str]:
++        out = [l for l in self.git("ls-files").stdout.splitlines() if l]
++        if untracked:
++            out += [e.path for e in self.status() if e.code == "??"]
++        return sorted(set(out))
++
++    def add(self, paths: List[str]) -> None:
++        for p in paths:
++            self.runner.policy.check_write(Path(self.root) / p)
++        self.git("add", "--", *paths)
++
++    def commit(self, message: str, paths: Optional[List[str]] = None, trailer: bool = True) -> str:
++        if paths:
++            self.add(paths)
++        if trailer and TRAILER not in message:
++            message = message.rstrip() + "\n\n" + TRAILER + "\n"
++        self.git("commit", "-q", "-m", message)
++        return self.head()
++
++    def worktree_add(self, path: str, branch: str, base: str = "HEAD") -> str:
++        if not re.fullmatch(r"[A-Za-z0-9._/-]+", branch) or ".." in branch:
++            raise ValueError(f"unsafe branch name {branch!r}")
++        self.git("worktree", "add", "-q", "-b", branch, path, base)
++        return str(Path(path).resolve())
++
++    def worktree_remove(self, path: str, branch: Optional[str] = None) -> None:
++        self.git("worktree", "remove", "--force", path, check=False)
++        self.git("worktree", "prune", check=False)
++        if branch:
++            self.git("branch", "-D", branch, check=False)
+diff --git a/agent/coliagent/selfimprove.py b/agent/coliagent/selfimprove.py
+new file mode 100644
+index 00000000..3352a8bf
+--- /dev/null
++++ b/agent/coliagent/selfimprove.py
+@@ -0,0 +1,176 @@
++"""A controlled self-improvement cycle.
++
++One cycle tests one hypothesis with one patch:
++
++  1. refuse the patch if it touches a protected path (the policy, this module,
++     .git, CI) - the agent cannot loosen its own rules or its own gate;
++  2. create an isolated git worktree on a fresh branch agent/improve-<id>;
++  3. measure the baseline metric there (if the hypothesis has a metric);
++  4. apply the patch, run every gate command, measure the metric again;
++  5. accept only if every gate passes and the metric moved by at least
++     ``min_gain`` in the right direction (median of ``repeats`` samples);
++  6. on acceptance commit to the branch (locally) and keep the branch for a
++     person to review; on rejection delete the branch. The worktree is always
++     removed, and every outcome is appended to a JSONL ledger.
++
++It never merges, never touches the main checkout, and never pushes.
++"""
++from __future__ import annotations
++
++import dataclasses
++import json
++import re
++import shutil
++import tempfile
++import time
++import uuid
++from dataclasses import dataclass, field
++from pathlib import Path
++from statistics import median
++from typing import Dict, List, Optional
++
++from . import patch as patchmod
++from .permissions import PermissionDenied, Policy
++from .repo import RepoManager
++from .state import gain_of
++from .tools import CommandResult, ToolRunner
++
++
++@dataclass
++class Hypothesis:
++    statement: str
++    metric: Optional[str] = None            # e.g. "decode tok/s"
++    metric_argv: Optional[List[str]] = None  # command that prints the metric
++    metric_regex: str = r"([-+]?\d+(?:\.\d+)?)"
++    metric_cwd: str = "."
++    lower_is_better: bool = False
++    min_gain: float = 0.02
++    repeats: int = 3
++
++
++@dataclass
++class Gate:
++    argv: List[str]
++    cwd: str = "."
++    timeout: Optional[float] = None
++
++
++@dataclass
++class Outcome:
++    id: str
++    accepted: bool
++    reason: str
++    branch: Optional[str] = None
++    commit: Optional[str] = None
++    baseline: List[float] = field(default_factory=list)
++    candidate: List[float] = field(default_factory=list)
++    gain: Optional[float] = None
++    gates: List[str] = field(default_factory=list)
++    diff: str = ""
++
++
++class ImprovementCycle:
++    def __init__(self, repo: RepoManager, policy: Policy, gates: List[Gate], ledger: Optional[str] = None,
++                 workdir: Optional[str] = None):
++        self.repo = repo
++        self.policy = policy
++        self.gates = gates
++        self.workdir = workdir or tempfile.gettempdir()
++        if ledger is None:
++            common = repo.git("rev-parse", "--git-common-dir").stdout.strip()
++            common_path = Path(common) if Path(common).is_absolute() else Path(repo.root) / common
++            ledger = str(common_path / "coliagent" / "ledger.jsonl")
++        self.ledger = ledger
++
++    def _metric(self, runner: ToolRunner, root: Path, h: Hypothesis) -> tuple:
++        samples: List[float] = []
++        results: List[CommandResult] = []
++        rx = re.compile(h.metric_regex)
++        for _ in range(max(1, h.repeats)):
++            res = runner.run(h.metric_argv, cwd=str(root / h.metric_cwd))
++            results.append(res)
++            if not res.ok:
++                return samples, results, f"metric command failed: {res.summary()}"
++            m = rx.search(res.stdout + "\n" + res.stderr)
++            if not m:
++                return samples, results, f"metric regex {h.metric_regex!r} found nothing"
++            samples.append(float(m.group(1)))
++        return samples, results, ""
++
++    def _record(self, out: Outcome, h: Hypothesis) -> None:
++        p = Path(self.ledger)
++        p.parent.mkdir(parents=True, exist_ok=True)
++        rec = dataclasses.asdict(out)
++        rec["hypothesis"] = dataclasses.asdict(h)
++        rec["at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
++        rec["diff_lines"] = out.diff.count("\n")
++        rec.pop("diff")
++        with open(p, "a", encoding="utf-8") as fh:
++            fh.write(json.dumps(rec) + "\n")
++
++    def run(self, h: Hypothesis, candidate: patchmod.Patch, cid: Optional[str] = None) -> Outcome:
++        cid = cid or uuid.uuid4().hex[:8]
++        branch = f"agent/improve-{cid}"
++        if self.policy.touches_protected(candidate.paths):
++            out = Outcome(cid, False, "patch touches a protected path")
++            self._record(out, h)
++            return out
++        if h.metric_argv is None and h.metric:
++            raise ValueError("a metric needs metric_argv")
++        wt = Path(self.workdir) / f"coliagent-{cid}"
++        if wt.exists():
++            shutil.rmtree(wt, ignore_errors=True)
++        out = Outcome(cid, False, "", branch=branch)
++        created = False
++        try:
++            self.repo.worktree_add(str(wt), branch)
++            created = True
++            wt_policy = dataclasses.replace(self.policy, root=str(wt.resolve()))
++            # no .pyc: a patch that keeps a file's size within the same mtime
++            # second would otherwise be masked by the baseline run's bytecode
++            runner = ToolRunner(wt_policy, base_env={"PYTHONDONTWRITEBYTECODE": "1"})
++            if h.metric_argv:
++                out.baseline, _, err = self._metric(runner, wt, h)
++                if err:
++                    out.reason = "baseline " + err
++                    return out
++            try:
++                out.diff = patchmod.apply(candidate, str(wt), wt_policy)
++            except (patchmod.PatchError, PermissionDenied) as e:
++                out.reason = f"patch rejected: {e}"
++                return out
++            for g in self.gates:
++                res = runner.run(g.argv, cwd=str(wt / g.cwd), timeout=g.timeout)
++                out.gates.append(res.summary())
++                if not res.ok:
++                    out.reason = f"gate failed: {res.summary()}\n{(res.stdout + res.stderr)[-2000:]}"
++                    return out
++            if h.metric_argv:
++                out.candidate, _, err = self._metric(runner, wt, h)
++                if err:
++                    out.reason = "candidate " + err
++                    return out
++                out.gain = gain_of(median(out.baseline), median(out.candidate), h.lower_is_better)
++                if out.gain < h.min_gain:
++                    out.reason = f"{h.metric}: gain {out.gain:.2%} below the required {h.min_gain:.2%}"
++                    return out
++            wt_repo = RepoManager(runner, str(wt))
++            msg = f"agent: {h.statement}\n\n{candidate.description}".rstrip()
++            if out.gain is not None:
++                msg += f"\n\n{h.metric}: median {median(out.baseline):g} -> {median(out.candidate):g} ({out.gain:+.2%})"
++            out.commit = wt_repo.commit(msg, paths=candidate.paths)
++            out.accepted = True
++            out.reason = "all gates passed" + ("" if out.gain is None else f"; gain {out.gain:+.2%}")
++            return out
++        finally:
++            if created:
++                self.repo.worktree_remove(str(wt), None if out.accepted else branch)
++            if not out.accepted:
++                out.branch = None
++            self._record(out, h)
++
++    def history(self) -> List[Dict]:
++        p = Path(self.ledger)
++        if not p.is_file():
++            return []
++        return [json.loads(l) for l in p.read_text(encoding="utf-8").splitlines() if l.strip()]
+diff --git a/agent/coliagent/state.py b/agent/coliagent/state.py
+new file mode 100644
+index 00000000..97b9cf48
+--- /dev/null
++++ b/agent/coliagent/state.py
+@@ -0,0 +1,122 @@
++"""Explicit project state and evidence-backed claims.
++
++A claim moves up a ladder; every rung above "proposed" needs evidence of the
++matching kind, so "it is faster" cannot be recorded without a measurement and
++"the tests pass" cannot be recorded without a passing run:
++
++  proposed       an idea or hypothesis; no evidence needed
++  applied        a change exists        evidence: a non-empty diff
++  built          it compiles            evidence: a successful build command
++  tested         tests pass             evidence: successful test commands
++  perf-verified  a metric improved      evidence: baseline and candidate samples
++                                        on the same machine, plus the command
++"""
++from __future__ import annotations
++
++import json
++import time
++from dataclasses import asdict, dataclass, field
++from pathlib import Path
++from statistics import median
++from typing import Dict, List, Optional
++
++from .tools import CommandResult
++
++LEVELS = ("proposed", "applied", "built", "tested", "perf-verified")
++
++
++class EvidenceError(Exception):
++    pass
++
++
++@dataclass
++class Claim:
++    id: str
++    statement: str
++    level: str = "proposed"
++    evidence: List[Dict] = field(default_factory=list)
++    updated: float = field(default_factory=time.time)
++
++
++def _cmd_evidence(results: List[CommandResult], kind: str) -> Dict:
++    if not results:
++        raise EvidenceError(f"{kind} needs at least one command result")
++    bad = [r.summary() for r in results if not r.ok]
++    if bad:
++        raise EvidenceError(f"{kind} evidence includes failures: {bad}")
++    return {"kind": kind, "commands": [r.summary() for r in results], "at": time.time()}
++
++
++@dataclass
++class ProjectState:
++    path: str
++    claims: Dict[str, Claim] = field(default_factory=dict)
++    notes: List[str] = field(default_factory=list)
++
++    @classmethod
++    def load(cls, path: str) -> "ProjectState":
++        p = Path(path)
++        st = cls(str(p))
++        if p.is_file():
++            data = json.loads(p.read_text(encoding="utf-8"))
++            st.claims = {k: Claim(**v) for k, v in data.get("claims", {}).items()}
++            st.notes = list(data.get("notes", []))
++        return st
++
++    def save(self) -> None:
++        p = Path(self.path)
++        p.parent.mkdir(parents=True, exist_ok=True)
++        tmp = p.with_suffix(p.suffix + ".tmp")
++        tmp.write_text(json.dumps({"claims": {k: asdict(v) for k, v in self.claims.items()},
++                                   "notes": self.notes}, indent=2), encoding="utf-8")
++        tmp.replace(p)
++
++    def propose(self, cid: str, statement: str) -> Claim:
++        c = self.claims.get(cid) or Claim(cid, statement)
++        self.claims[cid] = c
++        return c
++
++    def _raise(self, cid: str, level: str, ev: Dict) -> Claim:
++        c = self.claims[cid]
++        if LEVELS.index(level) > LEVELS.index(c.level):
++            c.level = level
++        c.evidence.append(ev)
++        c.updated = time.time()
++        return c
++
++    def applied(self, cid: str, diff: str) -> Claim:
++        if not diff.strip():
++            raise EvidenceError("applied needs a non-empty diff")
++        return self._raise(cid, "applied", {"kind": "diff", "lines": diff.count("\n"), "at": time.time()})
++
++    def built(self, cid: str, results: List[CommandResult]) -> Claim:
++        return self._raise(cid, "built", _cmd_evidence(results, "build"))
++
++    def tested(self, cid: str, results: List[CommandResult]) -> Claim:
++        return self._raise(cid, "tested", _cmd_evidence(results, "test"))
++
++    def perf_verified(self, cid: str, metric: str, baseline: List[float], candidate: List[float],
++                      lower_is_better: bool, min_gain: float, results: List[CommandResult],
++                      machine: str = "") -> Claim:
++        if len(baseline) < 1 or len(candidate) < 1:
++            raise EvidenceError("perf-verified needs baseline and candidate samples")
++        _cmd_evidence(results, "benchmark")
++        b, c = median(baseline), median(candidate)
++        gain = gain_of(b, c, lower_is_better)
++        if gain < min_gain:
++            raise EvidenceError(f"{metric}: gain {gain:.3%} is below the required {min_gain:.3%}")
++        return self._raise(cid, "perf-verified", {"kind": "metric", "metric": metric, "baseline": baseline,
++                                                  "candidate": candidate, "gain": gain, "machine": machine,
++                                                  "commands": [r.summary() for r in results], "at": time.time()})
++
++    def report(self) -> str:
++        lines = []
++        for c in sorted(self.claims.values(), key=lambda c: (-LEVELS.index(c.level), c.id)):
++            lines.append(f"[{c.level:>13}] {c.id}: {c.statement}")
++        return "\n".join(lines) or "(no claims)"
++
++
++def gain_of(baseline: float, candidate: float, lower_is_better: bool) -> float:
++    if baseline == 0:
++        return 0.0
++    return (baseline - candidate) / baseline if lower_is_better else (candidate - baseline) / baseline
+diff --git a/agent/coliagent/tools.py b/agent/coliagent/tools.py
+new file mode 100644
+index 00000000..09774096
+--- /dev/null
++++ b/agent/coliagent/tools.py
+@@ -0,0 +1,80 @@
++"""argv execution under the policy. No shell strings; every run is recorded."""
++from __future__ import annotations
++
++import os
++import subprocess
++import time
++from dataclasses import asdict, dataclass
++from pathlib import Path
++from typing import Dict, List, Optional, Sequence
++
++from .permissions import Policy
++
++
++@dataclass
++class CommandResult:
++    argv: List[str]
++    cwd: str
++    returncode: Optional[int]
++    seconds: float
++    stdout: str
++    stderr: str
++    timed_out: bool = False
++
++    @property
++    def ok(self) -> bool:
++        return self.returncode == 0 and not self.timed_out
++
++    def summary(self) -> str:
++        status = "timeout" if self.timed_out else f"exit {self.returncode}"
++        return f"{' '.join(self.argv)} -> {status} in {self.seconds:.1f}s"
++
++    def to_dict(self) -> Dict:
++        return asdict(self)
++
++
++def _tail(text: str, limit: int) -> str:
++    if len(text) <= limit:
++        return text
++    return f"[... {len(text) - limit} bytes cut ...]\n" + text[-limit:]
++
++
++class ToolRunner:
++    def __init__(self, policy: Policy, log: Optional[List[CommandResult]] = None,
++                 base_env: Optional[Dict[str, str]] = None):
++        self.policy = policy
++        self.log: List[CommandResult] = log if log is not None else []
++        self.base_env = dict(base_env or {})
++
++    def run(self, argv: Sequence[str], cwd: Optional[str] = None, timeout: Optional[float] = None,
++            env: Optional[Dict[str, str]] = None, input_text: Optional[str] = None) -> CommandResult:
++        argv = list(argv)
++        self.policy.check_command(argv)
++        workdir = str(Path(cwd or self.policy.root).resolve())
++        self.policy.check_read(workdir)
++        if ("/" in argv[0] or "\\" in argv[0]) and not os.path.isabs(argv[0]):
++            # resolve against the run's cwd; Windows would otherwise use ours
++            argv[0] = str(Path(workdir, argv[0]).resolve())
++            self.policy.check_command(argv)
++        full_env = dict(os.environ)
++        full_env.update(self.base_env)
++        if env:
++            full_env.update(env)
++        limit = min(timeout or self.policy.max_seconds, self.policy.max_seconds)
++        t0 = time.monotonic()
++        try:
++            p = subprocess.run(argv, cwd=workdir, env=full_env, input=input_text, capture_output=True,
++                               text=True, encoding="utf-8", errors="replace", timeout=limit, shell=False)
++            res = CommandResult(argv, workdir, p.returncode, time.monotonic() - t0,
++                                _tail(p.stdout or "", self.policy.max_output_bytes),
++                                _tail(p.stderr or "", self.policy.max_output_bytes))
++        except subprocess.TimeoutExpired as e:
++            out = e.stdout.decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
++            err = e.stderr.decode("utf-8", "replace") if isinstance(e.stderr, bytes) else (e.stderr or "")
++            res = CommandResult(argv, workdir, None, time.monotonic() - t0,
++                                _tail(out, self.policy.max_output_bytes),
++                                _tail(err, self.policy.max_output_bytes), timed_out=True)
++        except FileNotFoundError as e:
++            res = CommandResult(argv, workdir, 127, time.monotonic() - t0, "", str(e))
++        self.log.append(res)
++        return res
+diff --git a/agent/examples/colibri.json b/agent/examples/colibri.json
+new file mode 100644
+index 00000000..0ffa2a1d
+--- /dev/null
++++ b/agent/examples/colibri.json
+@@ -0,0 +1,11 @@
++{
++  "build": [{"cwd": "c", "argv": ["make", "qwen36"]}],
++  "tests": [
++    {"pattern": "c/tests/test_*.py", "cwd": "c", "steps": [["python", "-m", "unittest", "tests.{stem}"]]},
++    {"pattern": "c/tests/test_*.c", "cwd": "c", "steps": [["make", "tests/{stem}"], ["./tests/{stem}"]]},
++    {"pattern": "agent/tests/test_*.py", "cwd": "agent", "steps": [["python", "-m", "unittest", "tests.{stem}"]]},
++    {"pattern": "tests/test_*.py", "cwd": ".", "steps": [["python", "-m", "unittest", "tests.{stem}"]]}
++  ],
++  "full": [{"cwd": "agent", "argv": ["python", "-m", "unittest", "discover", "-s", "tests"]}],
++  "always": []
++}
+diff --git a/agent/tests/test_coliagent.py b/agent/tests/test_coliagent.py
+new file mode 100644
+index 00000000..153de21e
+--- /dev/null
++++ b/agent/tests/test_coliagent.py
+@@ -0,0 +1,266 @@
++import os
++import shutil
++import subprocess
++import sys
++import tempfile
++import unittest
++from pathlib import Path
++
++sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
++
++from coliagent import diagnose, patch as patchmod, planner  # noqa: E402
++from coliagent.index import RepoIndex  # noqa: E402
++from coliagent.llm import ScriptedBackend  # noqa: E402
++from coliagent.orchestrate import Orchestrator  # noqa: E402
++from coliagent.permissions import PermissionDenied, Policy  # noqa: E402
++from coliagent.repo import TRAILER, RepoManager  # noqa: E402
++from coliagent.selfimprove import Gate, Hypothesis, ImprovementCycle  # noqa: E402
++from coliagent.state import EvidenceError, ProjectState  # noqa: E402
++from coliagent.tools import ToolRunner  # noqa: E402
++
++PY = Path(sys.executable).name
++
++
++def git(root, *args):
++    subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
++
++
++class TempRepo(unittest.TestCase):
++    def setUp(self):
++        self.tmp = Path(tempfile.mkdtemp(prefix="coliagent-test-")).resolve()
++        self.root = self.tmp / "repo"
++        self.root.mkdir()
++        git(self.root, "init", "-q", "-b", "main")
++        git(self.root, "config", "user.email", "t@example.com")
++        git(self.root, "config", "user.name", "t")
++        git(self.root, "config", "core.autocrlf", "false")
++        (self.root / "pkg").mkdir()
++        (self.root / "pkg" / "__init__.py").write_text("")
++        (self.root / "pkg" / "speed.py").write_text("FACTOR = 2\n\n\ndef work(n):\n    return n * FACTOR\n")
++        (self.root / "tests").mkdir()
++        (self.root / "tests" / "__init__.py").write_text("")
++        (self.root / "tests" / "test_speed.py").write_text(
++            "import unittest\nfrom pkg.speed import work\n\n\nclass T(unittest.TestCase):\n"
++            "    def test_work(self):\n        self.assertEqual(work(3) % 3, 0)\n")
++        (self.root / "tests" / "test_other.py").write_text(
++            "import unittest\n\n\nclass T(unittest.TestCase):\n    def test_ok(self):\n        pass\n")
++        (self.root / "bench.py").write_text("from pkg.speed import FACTOR\nprint(f'tok/s: {FACTOR * 1.5}')\n")
++        git(self.root, "add", "-A")
++        git(self.root, "commit", "-q", "-m", "init")
++        self.policy = Policy(root=str(self.root), commands=("git", PY.lower().removesuffix(".exe"), "python"))
++        self.runner = ToolRunner(self.policy)
++        self.repo = RepoManager(self.runner)
++
++    def tearDown(self):
++        subprocess.run(["git", "worktree", "prune"], cwd=self.root, capture_output=True)
++        shutil.rmtree(self.tmp, ignore_errors=True)
++
++
++class PermissionTests(TempRepo):
++    def test_push_and_remote_are_denied(self):
++        for argv in (["git", "push"], ["git", "-c", "x=y", "push", "origin"], ["git", "remote", "add", "o", "u"]):
++            with self.assertRaises(PermissionDenied):
++                self.policy.check_command(argv)
++
++    def test_network_commands_need_permission(self):
++        with self.assertRaises(PermissionDenied):
++            self.policy.check_command(["git", "fetch"])
++        Policy(root=str(self.root), allow_network=True).check_command(["git", "fetch"])
++
++    def test_shell_strings_and_unknown_commands_denied(self):
++        with self.assertRaises(PermissionDenied):
++            self.policy.check_command("git status")
++        with self.assertRaises(PermissionDenied):
++            self.policy.check_command(["powershell", "-c", "rm -r /"])
++
++    def test_writes_outside_root_protected_or_secret_denied(self):
++        for p in (self.tmp / "outside.txt", "agent/coliagent/permissions.py", ".git/config", "deploy.pem", ".env"):
++            with self.assertRaises(PermissionDenied, msg=str(p)):
++                self.policy.check_write(p)
++        self.assertEqual(self.policy.check_write("pkg/speed.py"), "pkg/speed.py")
++
++    def test_write_roots_restrict(self):
++        pol = Policy(root=str(self.root), write_roots=("./pkg",))
++        pol.check_write("pkg/speed.py")
++        with self.assertRaises(PermissionDenied):
++            pol.check_write("tests/test_speed.py")
++
++    def test_runner_records_results(self):
++        res = self.runner.run(["git", "status", "--porcelain"])
++        self.assertTrue(res.ok)
++        self.assertIs(self.runner.log[-1], res)
++
++
++class RepoTests(TempRepo):
++    def test_status_commit_adds_trailer(self):
++        self.assertTrue(self.repo.is_clean())
++        (self.root / "new.txt").write_text("x\n")
++        self.assertEqual([e.path for e in self.repo.status()], ["new.txt"])
++        self.repo.commit("add new", paths=["new.txt"])
++        msg = subprocess.run(["git", "log", "-1", "--format=%B"], cwd=self.root, capture_output=True, text=True).stdout
++        self.assertIn(TRAILER, msg)
++        self.assertTrue(self.repo.is_clean())
++
++    def test_unsafe_branch_rejected(self):
++        with self.assertRaises(ValueError):
++            self.repo.worktree_add(str(self.tmp / "wt"), "a..b")
++
++
++class IndexTests(TempRepo):
++    def test_symbols_search_and_dependents(self):
++        (self.root / "c").mkdir()
++        (self.root / "c" / "eng.c").write_text('#include "eng.h"\nstatic int fast_path(int x) {\n  return x;\n}\n')
++        (self.root / "c" / "eng.h").write_text("#define ENG_MAX 4\nint fast_path(int x);\n")
++        (self.root / "c" / "test_eng.c").write_text('#include "eng.c"\nint main(void) { return 0; }\n')
++        idx = RepoIndex(str(self.root))
++        self.assertEqual([(s.path, s.line) for s in idx.find_symbol("work")], [("pkg/speed.py", 4)])
++        self.assertIn(("c/eng.c", 2, "function"), [(s.path, s.line, s.kind) for s in idx.find_symbol("fast_path")])
++        self.assertEqual(idx.find_symbol("ENG_MAX")[0].kind, "macro")
++        self.assertEqual([h.path for h in idx.search("FACTOR = ", glob="*.py")], ["pkg/speed.py"])
++        self.assertEqual(idx.dependents(["c/eng.h"]), {"c/eng.c", "c/test_eng.c"})
++        self.assertIn("tests/test_speed.py", idx.dependents(["pkg/speed.py"]))
++        (self.root / "tests" / "test_sub.py").write_text("from pkg import (\n    speed as s,\n)\nimport os\n")
++        self.assertIn("tests/test_sub.py", RepoIndex(str(self.root)).dependents(["pkg/speed.py"]))
++
++
++class PatchTests(TempRepo):
++    def test_multi_file_patch_is_all_or_nothing(self):
++        good = patchmod.Edit("pkg/speed.py", "FACTOR = 2", "FACTOR = 4")
++        bad = patchmod.Edit("bench.py", "not there", "x")
++        before = (self.root / "pkg" / "speed.py").read_text()
++        with self.assertRaises(patchmod.PatchError):
++            patchmod.apply(patchmod.Patch([good, bad]), str(self.root), self.policy)
++        self.assertEqual((self.root / "pkg" / "speed.py").read_text(), before)
++
++    def test_ambiguous_match_and_protected_write_refused(self):
++        (self.root / "dup.txt").write_text("a\na\n")
++        with self.assertRaises(patchmod.PatchError):
++            patchmod.apply(patchmod.Patch([patchmod.Edit("dup.txt", "a", "b")]), str(self.root), self.policy)
++        with self.assertRaises(PermissionDenied):
++            patchmod.apply(patchmod.Patch([patchmod.Edit(".git/hooks/x", "", "y")]), str(self.root), self.policy)
++
++    def test_apply_create_and_crlf(self):
++        (self.root / "w.txt").write_bytes(b"one\r\ntwo\r\n")
++        diff = patchmod.apply(patchmod.Patch([patchmod.Edit("w.txt", "one\ntwo", "one\n2"),
++                                              patchmod.Edit("made.txt", "", "hi\n")]), str(self.root), self.policy)
++        self.assertEqual((self.root / "w.txt").read_bytes(), b"one\r\n2\r\n")
++        self.assertEqual((self.root / "made.txt").read_text(), "hi\n")
++        self.assertIn("+++ b/made.txt", diff)
++        self.assertIn("-two", diff)
++
++
++class PlannerTests(unittest.TestCase):
++    def test_ready_order_and_cycles(self):
++        p = planner.Plan.from_dict({"goal": "g", "steps": [
++            {"id": "a", "title": "A"}, {"id": "b", "title": "B", "deps": ["a"]}, {"id": "c", "title": "C"}]})
++        self.assertEqual([s.id for s in p.ready()], ["a", "c"])
++        p.mark("a", "done")
++        self.assertEqual([s.id for s in p.ready()], ["b", "c"])
++        with self.assertRaises(planner.PlanError):
++            planner.Plan.from_dict({"steps": [{"id": "a", "title": "A", "deps": ["b"]},
++                                              {"id": "b", "title": "B", "deps": ["a"]}]})
++        with self.assertRaises(planner.PlanError):
++            planner.Plan.from_dict({"steps": [{"id": "a", "title": "A", "deps": ["zzz"]}]})
++
++    def test_llm_proposal_is_validated(self):
++        llm = ScriptedBackend(['Sure!\n```json\n{"steps": [{"id": "x", "title": "X", "verify": [["python", "-V"]]}]}\n```',
++                               '{"steps": [{"id": "Bad Id", "title": "X"}]}'])
++        self.assertEqual(planner.propose(llm, "goal").steps[0].verify, [["python", "-V"]])
++        with self.assertRaises(planner.PlanError):
++            planner.propose(llm, "goal")
++
++
++class DiagnoseTests(unittest.TestCase):
++    def test_parsers(self):
++        log = "\n".join([
++            "qwen36.c:120:5: error: 'x' undeclared (first use in this function)",
++            "qwen36.c:9:1: warning: unused variable 'y'",
++            r"C:\src\q.c(44,7): error C2065: 'z': undeclared identifier",
++            "ld: q.o: undefined reference to `cuda_init'",
++            'Traceback (most recent call last):',
++            '  File "c/tools/plan.py", line 12, in <module>',
++            "ValueError: bad cap",
++            "FAIL: test_cap (tests.test_plan.CapTests)",
++            "FAILED tests/test_a.py::test_b - assert 1 == 2",
++        ])
++        d = diagnose.parse(log)
++        self.assertEqual([(x.tool, x.severity) for x in d], [
++            ("cc", "error"), ("cc", "warning"), ("msvc", "error"), ("ld", "error"),
++            ("python", "error"), ("unittest", "fail"), ("pytest", "fail")])
++        self.assertEqual((d[0].path, d[0].line, d[0].col), ("qwen36.c", 120, 5))
++        self.assertEqual((d[2].path, d[2].line), (r"C:\src\q.c", 44))
++        self.assertEqual((d[4].path, d[4].line), ("c/tools/plan.py", 12))
++        self.assertEqual(len(diagnose.errors(log)), 6)
++
++
++class OrchestrateAndStateTests(TempRepo):
++    def test_selects_and_runs_dependent_tests(self):
++        orch = Orchestrator(self.runner, str(self.root))
++        self.assertEqual(orch.select_tests(["pkg/speed.py"]), ["tests/test_speed.py"])
++        self.assertEqual(orch.select_tests(["tests/test_other.py"]), ["tests/test_other.py"])
++        run = orch.run_test("tests/test_speed.py")
++        self.assertTrue(run.ok, run.results and run.results[-1].stderr)
++
++    def test_claims_need_matching_evidence(self):
++        st = ProjectState.load(str(self.tmp / "state.json"))
++        st.propose("faster", "decode is faster")
++        with self.assertRaises(EvidenceError):
++            st.applied("faster", "")
++        failing = self.runner.run([PY, "-c", "raise SystemExit(1)"])
++        with self.assertRaises(EvidenceError):
++            st.tested("faster", [failing])
++        ok = self.runner.run([PY, "-c", "print(1)"])
++        st.tested("faster", [ok])
++        with self.assertRaises(EvidenceError):
++            st.perf_verified("faster", "tok/s", [3.0], [3.01], False, 0.02, [ok])
++        st.perf_verified("faster", "tok/s", [3.0, 3.1], [3.6, 3.5], False, 0.02, [ok], machine="test")
++        st.save()
++        again = ProjectState.load(st.path)
++        self.assertEqual(again.claims["faster"].level, "perf-verified")
++
++
++class SelfImproveTests(TempRepo):
++    def cycle(self):
++        gates = [Gate([PY, "-m", "unittest", "-q", "tests.test_speed"])]
++        return ImprovementCycle(self.repo, self.policy, gates, ledger=str(self.tmp / "ledger.jsonl"),
++                                workdir=str(self.tmp))
++
++    def hyp(self, **kw):
++        return Hypothesis("a bigger factor raises tok/s", metric="tok/s", metric_argv=[PY, "bench.py"],
++                          metric_regex=r"tok/s: ([\d.]+)", repeats=2, **kw)
++
++    def branches(self):
++        return subprocess.run(["git", "branch", "--format=%(refname:short)"], cwd=self.root,
++                              capture_output=True, text=True).stdout.split()
++
++    def test_accepts_improvement_on_a_branch_without_touching_main(self):
++        head = self.repo.head()
++        out = self.cycle().run(self.hyp(), patchmod.Patch([patchmod.Edit("pkg/speed.py", "FACTOR = 2", "FACTOR = 3")]), "win")
++        self.assertTrue(out.accepted, out.reason)
++        self.assertAlmostEqual(out.gain, 0.5)
++        self.assertEqual(self.repo.head(), head)
++        self.assertTrue(self.repo.is_clean())
++        self.assertIn("agent/improve-win", self.branches())
++        self.assertFalse((self.tmp / "coliagent-win").exists())
++        shown = subprocess.run(["git", "show", "agent/improve-win:pkg/speed.py"], cwd=self.root,
++                               capture_output=True, text=True).stdout
++        self.assertIn("FACTOR = 3", shown)
++
++    def test_rejects_regression_gate_failure_and_protected_paths(self):
++        c = self.cycle()
++        slower = c.run(self.hyp(), patchmod.Patch([patchmod.Edit("pkg/speed.py", "FACTOR = 2", "FACTOR = 1")]), "slow")
++        self.assertFalse(slower.accepted)
++        self.assertIn("below the required", slower.reason)
++        broken = c.run(self.hyp(), patchmod.Patch([patchmod.Edit("pkg/speed.py", "return n * FACTOR", "return n * FACTOR + 1")]), "brk")
++        self.assertFalse(broken.accepted)
++        self.assertIn("gate failed", broken.reason)
++        sneaky = c.run(self.hyp(), patchmod.Patch([patchmod.Edit("agent/coliagent/selfimprove.py", "", "x")]), "sneak")
++        self.assertFalse(sneaky.accepted)
++        self.assertIn("protected", sneaky.reason)
++        self.assertEqual([b for b in self.branches() if b.startswith("agent/")], [])
++        self.assertEqual([r["id"] for r in c.history()], ["slow", "brk", "sneak"])
++        self.assertTrue(self.repo.is_clean())
++
++
++if __name__ == "__main__":
++    unittest.main()
+diff --git a/docs/q36-rtx3050-engineering.md b/docs/q36-rtx3050-engineering.md
+new file mode 100644
+index 00000000..80c55dd4
+--- /dev/null
++++ b/docs/q36-rtx3050-engineering.md
+@@ -0,0 +1,139 @@
++# Qwen3.6-35B-A3B on a 4 GB laptop: engineering notes
++
++Target: Ryzen 7 5800HS (8C/16T, Zen 3, AVX2), RTX 3050 Laptop 4 GB, 16 GB RAM,
++Windows 11, NVMe. Model: `qwen36-35b-a3b` Colibri int4 group-64.
++
++**What these notes are and aren't.** No line here was measured on the target. The
++changes were compiled and unit-tested on a different Windows host without a GPU,
++and the C tests ran with zig cc, not MSVC/nvcc. Each claim below is tagged:
++
++- **[code]**: read in the source.
++- **[test]**: covered by a test that passes in this repository.
++- **[estimate]**: comes from `c/tools/q36_target_plan.py`'s model with assumed hardware numbers.
++- **[hypothesis]**: needs a run on the target.
++
++## 1. Where the time goes (architecture map)
++
++```
++coli serve|chat --model <dir>
++  c/openai_server.py      gateway: resource plan -> cap_for_arch() -> spawns the engine
++    argv: qwen36 <cap> <bits>   env: SNAP=<model dir>, plan env via setdefault (user env wins)
++  c/qwen36.c main()
++    load dense trunk (attention, DeltaNet, shared expert, router, lm_head)
++    cap == 0 -> qwen36_cap_for_ram(): expert-cache slots per layer from free RAM
++    CUDA tier placement (COLI_CUDA): trunk matrices, then experts, into the allowance
++    trunk probe: GPU vs CPU GEMV timing -> keep or withdraw trunk / experts
++    warm start: fill VRAM and RAM slots (heat order with HEAT_FILE)
++    CUDA chain (COLI_CUDA_CHAIN): whole layer stack on the card, host runs routed experts
++  decode step, per layer (40: 30 DeltaNet + 10 gated attention)
++    router top-8 of 256 -> each expert: VRAM tier | RAM LRU slot | pread from SSD
++```
++
++Per token the 35B-A3B touches 40 x 8 routed experts of about 1.6 MB each at
++int4/gs64, about 0.5 GB in all **[estimate]**. Every expert that misses the RAM
++cache is an SSD read, so decode speed depends mostly on the cache hit rate
++**[estimate]**.
++
++## 2. Root causes found and fixes made
++
++| # | Finding | Evidence | Fix | Status |
++|---|---|---|---|---|
++| 1 | On 16 GB the gateway's RAM plan came out at 0 slots. `cap_for_arch` floored that to top-k = 8 and passed 8 as an **explicit** cap, which turned off the engine's own auto-sizing. The cache was then pinned at 8 of 256 experts per layer, so nearly every token streamed its experts from the SSD. | **[code]** `c/openai_server.py` `cap_for_arch` | Under the floor, qwen36 now gets cap 0 (auto). qwen38 is unchanged. | **[test]** `tests.test_openai_server -k cap` |
++| 2 | The engine's auto-size used peak RSS, did not hold back RAM for the KV cache (which is allocated after the sizing), and could go below top-k. | **[code]** `qwen36_cap_for_ram` | Uses the current working set (`rss_now_gb`), reserves the KV cache at `Q36_MAXT` (`Q36_KV_RESERVE`), and floors at top-k. | **[test]** `test_qwen36_cap_precedence.c` |
++| 3 | The trunk probe timed GEMVs cold. Each call carried a host↔device round trip that the CUDA chain pays only about once per layer. A laptop GPU at idle clocks with a full sync per GEMV can lose to the CPU, withdraw the trunk, and so disable the chain. | **[code]** `trunk_probe_gpu_wins` | Time-based warm-up (`COLI_TRUNK_PROBE_WARM_MS`). The probe measures the fixed round-trip cost and, when the chain will run, spreads it over `COLI_TRUNK_PROBE_PER_SYNC` GEMVs. The experts keep the synchronous verdict (#2211). | **[test]** `test_qwen36_trunk_probe.c`. Whether the verdict flips on a 3050 is a **[hypothesis]**. |
++
++Commits (local only): `58207297` (fixes 1-3, docs), `1794b88f` (planner).
++
++## 3. The planner
++
++```powershell
++python c\tools\q36_target_plan.py                       # text report
++python c\tools\q36_target_plan.py --json                # machine-readable
++python c\tools\q36_target_plan.py --ps1 run-q36.ps1 --model-dir D:\colibri-models\qwen36-35b
++python c\tools\q36_target_plan.py --config <model>\config.json --ram-gb 16 --vram-gb 4
++```
++
++The defaults below are **[estimate]** and every hardware number is an assumption:
++
++- **Expert cache:** about 109 slots/layer.
++- **KV reserve:** 0.62 GiB at 32k positions in f16. That is 20 KiB/token, since only the 10 attention layers keep KV.
++- **CUDA trunk:** 1.81 GiB, which fits a 2.70 GiB allowance.
++- **Decode:** about 5 tok/s with the trunk on the GPU vs about 4 on the CPU.
++
++The generated `.ps1` only sets variables you have not already set, then runs `coli`. Override the assumptions with flags (`--help`) once you have measured the target.
++
++## 4. Knobs that matter on this machine
++
++| Variable | Suggested | Why |
++|---|---|---|
++| cap (engine argv[1]) | leave 0 | Auto-sizing from measured RAM (fix 1). |
++| `Q36_MAXT` | 8192-32768 | Every 1k positions holds back 20 MiB of the expert cache. |
++| `COLI_CUDA`, `COLI_CUDA_CHAIN` | `1` | Trunk and chain on the card if it fits. |
++| `CUDA_EXPERT_GB` | unset first | Numeric values replace the 1 GiB headroom and disable expert withdrawal. Use only if the log says the chain declined for lack of room. |
++| `HEAT_FILE` | `<model>\heat.bin` | Warm start in heat order. The second run starts placed and the promotion brake engages. |
++| `DIRECT`, `PIPE` | A/B each | Unbuffered reads and I/O overlap. Gains depend on the drive (see ENVIRONMENT.md). |
++| `PILOT` | A/B, chain off only | Cross-layer prefetch. The CUDA chain declines under PILOT, so it is an either/or. |
++| `CACHE_ROUTE` | off by default | Lossy (changes routing). A/B with `ROUTE_AGREE` before any use. |
++| `OMP_NUM_THREADS` | 8 | Physical cores. SMT siblings rarely help GEMV. |
++| `COLI_TRUNK_PROBE_WARM_MS` / `_PER_SYNC` | 250 / 4 | New. `PER_SYNC=1` restores the old verdict. |
++| `Q36_KV_RESERVE` | on | New. `0` gives the KV room back to the cache. |
++
++## 5. What other projects do (research summary)
++
++Sources were read by a research pass on the projects' READMEs and design docs.
++Figures are **as reported by each project on its own hardware**. Nothing here
++was re-run, and items marked unverified could not be confirmed from source.
++
++| Project | Technique relevant here | Windows | Qwen3.6 hybrid | License | Takeaway for Colibri |
++|---|---|---|---|---|---|
++| [llama.cpp](https://github.com/ggml-org/llama.cpp) | `-ot` regex tensor placement, `--cpu-moe`, `--n-cpu-moe`, `--moe-cache-mib` (GPU cache for CPU experts) | native | `QWEN35MOE` arch in source (correctness unverified) | MIT | Baseline to compare against on the target: `-ot ".ffn_.*_exps.=CPU"` with the trunk on the 3050. |
++| [HotPin](https://github.com/LozzKappa/hotpin-llm) | Pin a popularity-ranked hot set in RAM, plus readahead | Win/Linux | no | AGPL-3.0 | Pinning helps only when the model exceeds RAM (it does here). Ideas only, no code reuse (AGPL). |
++| [expert-stream](https://github.com/Heman10x-NGU/expert-stream) | Batched `NO_BUFFERING\|OVERLAPPED` expert reads instead of mmap faults | Windows-only | no | MIT | Queue depth was the win on a close sibling (4800H, 16 GB, 1660 Ti). Colibri already has overlapped/unbuffered `pread` (`compat.h`, `DIRECT`, `PIPE`). Check reads in flight per layer on the target. |
++| [NeutronStar](https://github.com/giannisanni/neutronstar) | LFU host cache, persistent warm-start index, router look-ahead prefetch | Linux (io_uring) | no | MIT | Reports a concentrated hot set (about 4% of experts serve about 30% of lookups). Supports LFU/heat-weighted eviction over plain LRU (**[hypothesis]** for Qwen3.6). |
++| [Pulsar](https://github.com/giannisanni/pulsar) | Rust+CUDA, runs Qwen3.6-35B-A3B; KV on 10/40 layers, split-K long-context attention | Linux-only | **yes** | MIT | The only project here with Qwen3.6 numbers (16 GB cards). Its K-quant vs IQ-quant result agrees with staying on int4 gs64. |
++| [moe-ssd-streaming-windows](https://github.com/tonbistudio/moe-ssd-streaming-windows) | Stock llama.cpp plus Windows page cache; Win32 I/O microbenchmarks | native | no | MIT (README) | Its microbenchmarks and a PCIe x2-lane misconfiguration finding make a cheap drive sanity check on the target. |
++| [AirLLM](https://github.com/lyogavin/airllm) | Layer-by-layer HF checkpoint streaming | cross-platform | unconfirmed | Apache-2.0 | Not expert-selective as far as could be verified. Low value here. |
++| [ds4](https://github.com/antirez/ds4) | Native C SSD-streaming engine for a fixed model list | no | no | MIT | Ancestor of NeutronStar/Pulsar. Little direct value for a 4 GB Windows laptop. |
++
++## 6. Prioritized backlog
++
++Each item is a **[hypothesis]** until it is A/B'd on the target with the protocol in §7.
++
++1. **Validate fixes 1-3 on the target.** Run `coli doctor` and `coli plan`, then check the log for `cache auto-sized: N slots/layer`, where N should be far above 8, and for whether the trunk probe keeps the trunk.
++2. **Measure the drive.** Use `c/iobench.c`, or the tonbistudio microbenchmarks, at queue depths 1/4/16 with and without `DIRECT`. This tells whether `PIPE`/`DIRECT` can pay at all.
++3. **`HEAT_FILE` warm start.** One training conversation, then compare decode tok/s and hit rate with and without the file. Cheap, and already implemented.
++4. **CUDA chain on 4 GB.** Check the KV mirror on the device at the chosen `Q36_MAXT`. If the chain declines, try a smaller `Q36_MAXT` before raising `CUDA_EXPERT_GB`.
++5. **Heat-weighted (LFU-like) eviction for the RAM cache.** Prompted by NeutronStar's popularity skew. Needs a route trace from Qwen3.6 first to confirm the skew.
++6. **PILOT vs chain.** On a card where the chain fits, compare chain-on against chain-off with `PILOT=1`.
++7. **`CACHE_ROUTE`.** Lossy, so judge it on quality as well as speed: `ROUTE_AGREE` overlap/KL plus a task eval, not just tok/s.
++8. **Prefill chunking on 4 GB.** Measure time-to-first-token for 2k/8k prompts. The chain's prompt chunks compete with the expert tier for VRAM.
++
++## 7. How to validate on the target
++
++```powershell
++coli doctor                                   # hardware and model detection
++python c\tools\q36_target_plan.py --ps1 run-q36.ps1
++.\run-q36.ps1                                 # check the startup log lines below
++$env:COLI_TIMERS=1; $env:N_NEW=200; $env:COLI_TEMP=0   # fixed, greedy, timed runs
++```
++
++Startup lines to read:
++
++- `[qwen36] cache auto-sized: <N> slots/layer of 256 experts ...`, which includes the KV reserve.
++- The trunk probe verdict line and whether the CUDA chain started or declined (it names the first matrix on the CPU).
++- `[qtier] HEAT_FILE loaded/saved`.
++
++A/B protocol:
++
++- Same prompt, `COLI_TEMP=0`, 3 runs each, report the median.
++- Change one variable at a time.
++- Record the drive, power plan (AC, "best performance"), and free RAM at start.
++- Keep raw logs under `experiments/` like the existing runs.
++
++`agent/` (coliagent) can drive this: `python -m coliagent improve --gate ... --metric-argv ...` accepts a change only if every gate passes and the median metric beats the baseline by `--min-gain`.
++
++## 8. Limitations
++
++- No measurement on the RTX 3050 / 5800HS. Bandwidths, OS RAM use, VRAM taken by the display, and the probe verdict on that GPU are assumptions.
++- The fake-CUDA chain test is timing-sensitive. It failed once out of six runs under concurrent compile load, and that test does not cover the changed code.
++- Build used zig cc (`x86_64-windows-gnu`). An MSVC + nvcc CUDA build was not done here.
+-- 
+2.53.0.windows.3
+
