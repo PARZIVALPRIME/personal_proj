@@ -49,8 +49,6 @@ rem     LRU, refilled from the heat history at every start
 set "Q36_EVICT=slru"
 set "Q36_SLRU_PROT=0.8"
 set "Q36_HEAT=1"
-rem --- 92% of the RAM free at start (sweep-1: 16.1 tok/s against 15.1 at 88%) -------
-if "%Q36_RAM_FRAC%"=="" set "Q36_RAM_FRAC=0.92"
 rem --- next layers' experts read while this layer computes ------------------------
 if "%Q36_LOOKAHEAD%"=="" set "Q36_LOOKAHEAD=1"
 rem --- experts.q36x: one unbuffered read per miss (build once: turbo-qwen36.bat xpack)
@@ -147,18 +145,16 @@ echo Sweep logs in %SWEEP% (N_NEW=%N_NEW%)
 call :mklong
 set "PROMPT=%HERE%prompt.txt"
 set "LONG=%HERE%prompt-long.txt"
-call :one vk-tier            
-rem the expert tier off: the round-4 configuration
-call :one vk-notier          "COLI_VK_TIER=0"
-call :one vk-tier-hostpool   "COLI_VK_TIER_HOST="
-call :one vk-tier-ram88      "Q36_RAM_FRAC=0.88"
-call :one long-vk-tier       "PROMPT=%LONG%" "N_NEW=48"
+call :one vk                 
+rem the expert tier on (sweep-2: 1.7 tok/s before round 8's fix of its RAM leak)
+call :one vk-tier            "COLI_VK_TIER=1"
+call :one vk-tier-nostream   "COLI_VK_TIER=1" "COLI_VK_TIER_STREAM=0"
+call :one vk-ram92           "Q36_RAM_FRAC=0.92"
+call :one long-vk            "PROMPT=%LONG%" "N_NEW=48"
 rem the prompt's experts in row runs, as before round 7
 call :one long-vk-pf0        "PROMPT=%LONG%" "N_NEW=48" "Q36_PF_EXPERT=0"
-call :one long-vk-notier     "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_TIER=0"
-call :one long-vk-rows2560   "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_CHAIN_ROWS=2560"
-call :one long-vk-hostpool   "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_TIER_HOST="
-call :one vk-tier-lossy1     "Q36_SKIP_MISS=0.06" "COLI_DENSE_BITS=4" "COLI_DENSE_INT4=lmhead"
+call :one long-vk-tier-nostream "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_TIER=1" "COLI_VK_TIER_STREAM=0"
+call :one vk-lossy1          "Q36_SKIP_MISS=0.06" "COLI_DENSE_BITS=4" "COLI_DENSE_INT4=lmhead"
 echo.
 echo ===== %SWEEP%\summary.txt =====
 type "%SWEEP%\summary.txt"
@@ -178,7 +174,9 @@ echo [%NAME%] running ...
 "%COLI_ENGINE%" 0 4 "%PROMPT%" > "%SWEEP%\%NAME%.log" 2>&1
 set "RC=%ERRORLEVEL%"
 >> "%SWEEP%\summary.txt" echo ---- %NAME% (exit %RC%)
-findstr /c:"Speed:" /c:"TTFT" /c:"prompt tokens" /c:"prefill:" /c:"hit rate" /c:"expert kernel" /c:"lm_head" /c:"step() total" /c:"cache auto-sized" /c:"expert cache" /c:"on the CPU (" /c:"tier qwen36" /c:"cannot open" /c:"Q36_SKIP_MISS:" /c:"Q36_LOOKAHEAD:" /c:"Q36_XPACK:" /c:"Q36_PF_EXPERT:" /c:"chain: prompt chunks" "%SWEEP%\%NAME%.log" >> "%SWEEP%\summary.txt"
+findstr /c:"Speed:" /c:"TTFT" /c:"prompt tokens" /c:"prefill:" /c:"hit rate" /c:"expert kernel" /c:"lm_head" /c:"step() total" /c:"cache auto-sized" /c:"expert cache" /c:"on the CPU (" /c:"tier qwen36" /c:"cannot open" /c:"Q36_SKIP_MISS:" /c:"Q36_LOOKAHEAD:" /c:"Q36_XPACK:" /c:"Q36_PF_EXPERT:" /c:"chain: prompt chunks" /c:"PEAK RSS" "%SWEEP%\%NAME%.log" >> "%SWEEP%\summary.txt"
+rem a failed run: its last lines say why
+if not "%RC%"=="0" powershell -NoProfile -Command "Get-Content -Tail 12 '%SWEEP%\%NAME%.log'" >> "%SWEEP%\summary.txt"
 endlocal
 goto :eof
 
@@ -208,8 +206,11 @@ set "COLI_VULKAN=1"
 set "PILOT=0"
 rem the chain and the lm_head first; the expert tier (shaders from build-turbo.bat vk) takes what is left
 if "%COLI_VK_TIER_RESERVE_GB%"=="" set "COLI_VK_TIER_RESERVE_GB=0.5"
+rem routed experts on the CPU: the tier measured slower here (sweep-2); COLI_VK_TIER=1 tries it
+if "%COLI_VK_TIER%"=="" set "COLI_VK_TIER=0"
 rem its RAM host pool would take RAM from the CPU's expert cache (91-95% hits): off unless measured better
 if "%COLI_VK_TIER_HOST%"=="" set "COLI_VK_TIER_HOST=0"
+if "%COLI_VK_TIER%"=="0" goto :eof
 if not exist "%COLI_VK_SHADERS%\qmatmul_gate_up.spv" (
     echo NOTE: the Vulkan expert shaders are not built, routed experts stay on the CPU.>&2
     echo       Build them once: "%SRC%\c\build-turbo.bat" vk>&2

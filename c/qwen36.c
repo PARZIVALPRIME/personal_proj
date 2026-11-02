@@ -6304,19 +6304,18 @@ static VktExpertSrc vk_slot_src(Model *m, int layer, Slot *e) {
     }
     if (e->pw) {
         int64_t gp = (int64_t)m->c.inter * q36_eh(&m->c) / 2;
-        if (xf_r16(m)) {   /* the device reads planar rows and scale arrays: back from the groups, once per expert */
+        if (xf_r16(m)) {   /* the device reads planar rows and scale arrays: back from the groups */
             const int H = q36_eh(&m->c), I = m->c.inter; const int64_t scu = scale_count_gu(&m->c), nsc = 2 * scu + scale_count_d(&m->c);
             const size_t gu = (size_t)(I / 16) * xf16_group_bytes(H);
-            if (!e->t8 && !(e->t8 = malloc((size_t)(3 * gp)))) { fprintf(stderr, "OOM int4 expert for the Vulkan tier\n"); exit(1); }
-            if (!e->t8s && !(e->t8s = malloc((size_t)nsc * sizeof(float)))) { fprintf(stderr, "OOM int4 expert for the Vulkan tier\n"); exit(1); }
-            uint8_t *b = (uint8_t *)e->t8;
-            if (e->t8_eid != e->eid + 1) {
-                xf16_unpack(b,          e->t8s,           e->pw,          I, H);
-                xf16_unpack(b + gp,     e->t8s + scu,     e->pw + gu,     I, H);
-                xf16_unpack(b + 2 * gp, e->t8s + 2 * scu, e->pw + 2 * gu, H, I);
-                e->t8_eid = e->eid + 1;
-            }
-            return (VktExpertSrc){b, b + gp, b + 2 * gp, e->t8s, e->t8s + scu, e->t8s + 2 * scu};
+            /* one buffer a thread, not one a cache slot (that doubled the cache's RAM); every
+             * caller's tier copies the bytes before this thread asks for another expert */
+            static _Thread_local uint8_t *b; static _Thread_local float *bs;
+            if (!b && !(b = malloc((size_t)(3 * gp)))) { fprintf(stderr, "OOM int4 expert for the Vulkan tier\n"); exit(1); }
+            if (!bs && !(bs = malloc((size_t)nsc * sizeof(float)))) { fprintf(stderr, "OOM int4 expert for the Vulkan tier\n"); exit(1); }
+            xf16_unpack(b,          bs,           e->pw,          I, H);
+            xf16_unpack(b + gp,     bs + scu,     e->pw + gu,     I, H);
+            xf16_unpack(b + 2 * gp, bs + 2 * scu, e->pw + 2 * gu, H, I);
+            return (VktExpertSrc){b, b + gp, b + 2 * gp, bs, bs + scu, bs + 2 * scu};
         }
         return (VktExpertSrc){e->pw, e->pw + gp, e->pw + 2 * gp, e->gs, e->us, e->ds};
     }
@@ -6363,7 +6362,7 @@ static void moe_vk_xf_cpu(Model *m, int layer, const float *x, int S, const int 
                 int src = (s0 + s) * K + (k0 + k), dst = s * kper + k;
                 if (!held[dst]) continue;
                 memcpy(ctb + (int64_t)src * D, lctb + (int64_t)dst * D, (size_t)D * sizeof(float));
-                VktExpertSrc vs = vk_slot_src(m, layer, held[dst]); vkt_note(layer, idx[src], &vs);
+                if (vkt_wants(layer, idx[src])) { VktExpertSrc vs = vk_slot_src(m, layer, held[dst]); vkt_note(layer, idx[src], &vs); }
                 slot_release(held[dst]);
             }
         }
