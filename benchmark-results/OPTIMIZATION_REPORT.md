@@ -356,3 +356,38 @@ call c\build-turbo.bat vk
 set N_NEW=128
 call benchmark-results\turbo-qwen36.bat sweep
 ```
+
+## Vulkan benchmark follow-up
+
+The controlled 128-token Vulkan run completed successfully at **6.09 tok/s**
+with **2.046 s TTFT**, **91.4% expert-cache hits**, and **62.45 ms/token
+expert fetch**. The dense trunk was on the RTX 3050, but the routed experts
+remained on the CPU because the optional expert SPIR-V files were not present.
+
+Vulkan with `LOSSY=1` completed at **9.76 tok/s** with **94.1% cache hits**,
+**37.28 ms/token expert fetch**, and 251 skipped routed experts out of 42,880
+(0.6%). The lossy Vulkan result is the fastest measured configuration so far,
+but it is not numerically equivalent to the normal path: it skips low-weight
+cache-miss experts and uses the int4 LM head. Keep it opt-in until a response
+quality check is completed.
+
+The committed raw logs are:
+
+- `bench-turbo-12.log`: Vulkan, normal quality
+- `bench-turbo-13.log`: Vulkan with `LOSSY=1`
+
+Fastest measured launch:
+
+```cmd
+call c\build-turbo.bat vk
+set GPU=vk
+set LOSSY=1
+set N_NEW=128
+call benchmark-results\turbo-qwen36.bat bench
+```
+
+The next performance opportunity is compiling and loading
+`qmatmul_gate_up.spv`, `rmsnorm.spv`, and `attention_absorb.spv`; without them,
+the Vulkan expert tier reports `no expert batch on this device` and routed
+experts stay on the host. A shader compiler such as `glslc` is not currently
+available on this PC.

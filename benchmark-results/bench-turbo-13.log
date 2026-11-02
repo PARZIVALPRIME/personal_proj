@@ -1,0 +1,82 @@
+== qwen36 Phase-2 engine | cache=auto/layer bits=4 ctx=16384 pilot=0 wide=1 hot=0 smooth=0.30 conf=0.92 ==
+[tok] loaded 248044 pieces (max id 248069) from D:\colibri-models\qwen36-35b\tokenizer.json
+[enc] prompt tokens: 32 | generating 128 new tokens
+[meta] loaded: q_heads=16 kv_heads=2 head_dim=256 q_head_dim=512 k_head_dim=256 v_head_dim=256 o_in=4096 rotary_dim=64 n_experts=256 topk=8 inter=512 shared_inter=512 n_group=1 topk_group=1 attn_output_gate=1 n_active=10
+[meta] DeltaNet: vheads=32 kheads=16 kdim=128 vdim=128 convk=4 conv_dim=8192
+[qwen36] embedding: rows read in place from the checkpoint, COLI_EMBED_MMAP=0 builds the f32 table
+[dense-i8] 291 matrices quantized during load, 7.2 GB f32 freed
+[qwen36] expert kernel: planar int4 in RAM (expert_ffn.h), QWEN_EXPERT_KERNEL=0 restores int8 unpack
+[qwen36] cache auto-sized: 109 slots/layer of 256 experts (9.8 GB budget via 88% of available RAM, 1.7 GB resident, 0.31 GB KV reserved for 16384 positions, 2 MB/slot, floor 8)
+[qwen36] group-scaled experts: gs=64
+resident weights loaded in 9.7s | RSS after load: 2.93 GB
+[VK] VRAM pressure-proofing: memory_priority on, memory_budget on
+[VK] memory: mapped weights, the host-visible device-local memory gave the 2 GiB asked (9/10 of its heap, less if its budget leaves less), found in 1.3 s
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/qmatmul_gate_up.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/rmsnorm.spv
+[VK] cannot open D:\colibri-main\colibri-main\c\shaders/attention_absorb.spv
+[VK] ready: NVIDIA GeForce RTX 3050 Laptop GPU, compute qfam 0, memtype 5, tiled GEMM from S=2 and S*O>=4096 (cooperative matrix)
+[VK] qwen36: device ready, dense matrices on the device (default)
+[VK] qwen36: dense chain on (a discrete GPU, beside the expert tier)
+[qwen36] expert format on disk: int4 packed (tier fmt=4)
+[VK] qwen36 chain fit: free 3526808372 B, reserve 1073741824 B, fixed 555838720 B (the engine's 69299456 B, the pools' 486539264 B), tail 286064640 B, layers 40171776 40171776 40171776 31804672 40171776 40171776 40171776 31804672 40171776 40171776 40171776 31804672 40171776 40171776 40171776 31804672 40171776 40171776 40171776 31804672 40171776 40171776 40171776 31804672 40171776 40171776 40171776 31804672 40171776 40171776 40171776 31804672 40171776 40171776 40171776 31804672 40171776 40171776 40171776 31804672 B, matrices 37827592 37827592 37827592 30999556 37827592 37827592 37827592 30999556 37827592 37827592 37827592 30999556 37827592 37827592 37827592 30999556 37827592 37827592 37827592 30999556 37827592 37827592 37827592 30999556 37827592 37827592 37827592 30999556 37827592 37827592 37827592 30999556 37827592 37827592 37827592 30999556 37827592 37827592 37827592 30999556 B
+[VK] qwen36 chain: 40 of 40 layers on the device (1.42 GiB), 0 on the CPU (free 3.28 GiB, reserve 1.00 GiB)
+[VK] chain: chain_gemv2 stages x in 48 KiB of shared memory, the device's limit
+[VK] qwen36: dense weights on the device only (a discrete GPU with room for them: 1.60 of 2.22 GiB free; COLI_VK_DENSE_HOST=1 keeps the host copy)
+[VK] qwen36 chain: 40 of 40 layers placed: 1444823320 B of matrices on the device (the fit counted 1444823320 B for these layers), chain buffers 78891776 B, device memory held 1811939328 B
+[VK] qwen36 chain: 40 layers on the device (10 attention), 4.4 MiB of parameters
+[VK] chain: 20 pipelines made before the expert tier, in 0.0 s (COLI_VK_CHAIN_PREWARM=0: at first use)
+[VK] qwen36: 291 dense matrices on the device only, 1.60 GiB of host RAM given back; kept on the host: the embedding (its rows are gathered on the CPU), the DeltaNet's a/b rows and the shared expert's gate vector, norms, the vision tower, any imported pages
+[VK] qwen36: 1.60 GiB of dense host copies now live on the device only: expert cache 109 -> 130 slots a layer
+[USAGE] expert history: 796160 selections (D:\colibri-models\qwen36-35b/.coli_usage)
+[VK] tier qwen36: no expert batch on this device (shaders?), the experts stay on the CPU
+[qwen36] 8 expert loader threads: a layer's misses read in parallel (Q36_IO_THREADS=0 reads them one at a time)
+[qwen36] int4 packed weights detected — kept int4, rows interleaved by 16 for expert_ffn.h (Q36_ILV16=0 keeps the rows)
+[qwen36] int4 packed weights detected — kept int4, rows interleaved by 16 for expert_ffn.h (Q36_ILV16=0 keeps the rows)
+[qwen36] int4 packed weights detected — kept int4, rows interleaved by 16 for expert_ffn.h (Q36_ILV16=0 keeps the rows)
+[qwen36] int4 packed weights detected — kept int4, rows interleaved by 16 for expert_ffn.h (Q36_ILV16=0 keeps the rows)
+[qwen36] int4 packed weights detected — kept int4, rows interleaved by 16 for expert_ffn.h (Q36_ILV16=0 keeps the rows)
+[qwen36] int4 packed weights detected — kept int4, rows interleaved by 16 for expert_ffn.h (Q36_ILV16=0 keeps the rows)
+[qwen36] int4 packed weights detected — kept int4, rows interleaved by 16 for expert_ffn.h (Q36_ILV16=0 keeps the rows)
+[qwen36] int4 packed weights detected — kept int4, rows interleaved by 16 for expert_ffn.h (Q36_ILV16=0 keeps the rows)
+[qwen36] Q36_HEAT: 4704 experts warm in RAM in 6.7 s (1.25 GB/s)
+Generated (128 new tokens):
+Text : [qwen36] KV cache: float16, 0.02 GiB at 1024 positions (half of float32; Q36_KV=f32 keeps float32)
+[VK] qwen36 chain: prompt chunks of up to 1792 rows (389 KiB a row; 1.34 GiB free on the device or in RAM, half of it at most; COLI_VK_CHAIN_ROWS sets it, COLI_VK_CHAIN_ROWS_MAX caps it at 8192)
+[qwen36] Q36_SKIP_MISS=0.060: decode skips non-resident experts past rank 4 below that weight (lossy)
+
+assistant<think>
+Here's a thinking process:
+
+1.  **Analyze User Input:**
+   - **Role:** Coding benchmark
+  [timers] window: moe 59 ms/token (last 32)
+ - **Task:** Write a concise Python function `fibonacci(n)` that returns the nth Fibonacci number
+   - **Requirement:** Include a brief explanation
+   - **Constraint:** Output code only
+
+2.  **Identify Key Constraints & Conflicts:**
+   - The[timers] window: moe 72 ms/token (last 32)
+ prompt says: "with a brief explanation. Output code only."
+   - This is a direct contradiction. "Output code only" typically means no explanations, but the prompt explicitly asks for one.
+TTFT: 1.194 s (time to first token)
+[qwen36 spec gate] run: T(1) 83.8 ms, rows 2:1.79 3:2.39, rho 0.42, acceptance by position 0.74 0.50 0.50 0.50 0.50
+[qwen36 lookup] run: 1.13 tokens/forward (112 forwards per 127 tokens) | acceptance 68.2% (15/22 drafts in 18 verifies) | gate on, 3 declined, 4 probes
+[timers] decode: 94 tokens  (shared/router are subsets of moe_total)
+[timers]   deltanet         0.0 ms      0.00 ms/token
+[timers]   attention        0.0 ms      0.00 ms/token
+[timers]   moe_total     6096.1 ms     64.85 ms/token
+[timers]   (shared)         0.0 ms      0.00 ms/token
+[timers]   (router)         1.7 ms      0.02 ms/token
+[timers]   lm_head          0.1 ms      0.00 ms/token
+[timers]   TOTAL         6096.2 ms     64.85 ms/token
+[timers]   step() total: 126.5 ms/token (outside the phases: 61.7)
+[timers]   expert kernel: fetch 37.28 | compute 26.39 ms/token
+[timers]   Q36_SKIP_MISS: 251 of 42880 routed experts skipped (0.6%)
+[timers] prefill: 72 tokens  dn=0 attn=0 moe=3139(sh=0 rt=1) head=0 ms
+
+PEAK RSS: 8.92 GB
+Expert cache hit rate: 94.1% (hit=41169 miss=2600)
+Speed: 9.76 tok/s (13.1s for 128 tokens)
+[VK] qwen36: 0 matmuls on the GPU (361 matrices resident, 1650.7 MiB; placed int8 290, int4 1, f32 0)
+[VK] qwen36 chain: 113 forwards, 9386 frames (81016 ops, 40793 matmuls, 290 tiled GEMM), 3075.0 ms waiting for the device, 9234.7 ms of routed experts on the host, 0 layer steps with the routed experts in the frame (0 of them a prompt chunk's, 0 in the integer form), 274.7 MiB on the device
+[VK] qwen36: dense weights at exit: 291 matrices on the device only (1.60 GiB of host copies dropped), 0 read back from disk for the CPU (0.0 MiB)
