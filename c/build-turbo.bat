@@ -10,7 +10,8 @@ rem                            same version as this source tree.
 rem   build-turbo.bat vk       + Vulkan trunk chain and expert tier (RTX 3050 through
 rem                            the NVIDIA Vulkan driver). Uses the Vulkan SDK headers
 rem                            if installed, else clones Khronos' Vulkan-Headers; the
-rem                            SPIR-V shaders are already in c\shaders.
+rem                            shaders the repo does not carry compiled are built with
+rem                            glslc, or Khronos' glslang, downloaded once if needed.
 rem
 rem Overrides (set before calling): LLVM_MINGW (toolchain root), COLI_RUNTIME
 rem (installed runtime holding coli_cuda.dll and the CUDA DLLs).
@@ -54,6 +55,7 @@ if not exist "%VKINC%\vulkan\vulkan.h" (
     exit /b 1
 )
 set "VKF=-DCOLI_VULKAN -I"%VKINC%""
+call :shaders
 echo Building qwen36.exe (CPU + Vulkan chain and tier) ...
 clang %CFL% %VKF% -c backend_vulkan.c -o backend_vulkan.o || goto failed
 clang %CFL% %VKF% -c vk_tier.c -o vk_tier.o || goto failed
@@ -91,3 +93,45 @@ echo.>&2
 echo BUILD FAILED. If make worked before, the old command still works too:>&2
 echo   make -C c qwen36 ARCH=native LDFLAGS="-lm -fopenmp -pthread -lpsapi -L%OMPLIB%">&2
 exit /b 1
+
+rem ---------------------------------------------------------------------------
+rem The SPIR-V the repo does not carry (gitignored build products). Without them
+rem the Vulkan expert tier says "no expert batch on this device" and every routed
+rem expert, a long prompt's included, runs on the CPU. A shader that will not
+rem compile only costs that shader: the engine goes without it, as before.
+:shaders
+rem runs inside c\ (the pushd above): every path here is relative to it
+set "SHC="
+set "SHKIND="
+where glslc >nul 2>&1 && (set "SHC=glslc" & set "SHKIND=glslc")
+if "%SHC%"=="" if exist "%VULKAN_SDK%\Bin\glslc.exe" (set "SHC=%VULKAN_SDK%\Bin\glslc.exe" & set "SHKIND=glslc")
+if "%SHC%"=="" where glslangValidator >nul 2>&1 && (set "SHC=glslangValidator" & set "SHKIND=glslang")
+if not "%SHC%"=="" goto sh_have
+call :sh_find
+if not "%SHC%"=="" goto sh_have
+echo Fetching glslang, Khronos' reference shader compiler, into c\third_party\glslang ...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $z=Join-Path $env:TEMP 'coli-glslang.zip'; Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/KhronosGroup/glslang/releases/download/main-tot/glslang-main-windows-x86_64-release.zip' -OutFile $z; Expand-Archive -Force -Path $z -DestinationPath '%CD%\third_party\glslang'"
+call :sh_find
+if not "%SHC%"=="" goto sh_have
+echo WARNING: no shader compiler. The Vulkan expert tier stays off; install the Vulkan SDK>&2
+echo          with "winget install KhronosGroup.VulkanSDK", open a new prompt and build again.>&2
+goto :eof
+:sh_have
+echo Compiling the missing Vulkan shaders with %SHKIND% ...
+set "SHBAD=0"
+for %%S in (qmatmul_gate_up rmsnorm attention_absorb qmatmul_bd qmatmul_gate_up_bd expert_act expert_act_v4 chain_dnconv_rows) do call :sh_one %%S
+if not "%SHBAD%"=="0" echo WARNING: %SHBAD% shader^(s^) did not compile; the engine runs without them.>&2
+goto :eof
+:sh_one
+if exist "shaders\%1.spv" goto :eof
+if not exist "shaders\%1.comp" goto :eof
+if "%SHKIND%"=="glslc" "%SHC%" --target-env=vulkan1.2 "shaders\%1.comp" -o "shaders\%1.spv"
+if "%SHKIND%"=="glslang" "%SHC%" -V --target-env vulkan1.2 "shaders\%1.comp" -o "shaders\%1.spv" >nul
+if not exist "shaders\%1.spv" set /a "SHBAD+=1"
+if exist "shaders\%1.spv" echo   shaders\%1.spv
+goto :eof
+:sh_find
+if not exist "third_party\glslang" goto :eof
+for /r "third_party\glslang" %%F in (glslangValidator.exe) do if exist "%%F" (set "SHC=%%F" & set "SHKIND=glslang")
+if "%SHC%"=="" for /r "third_party\glslang" %%F in (glslang.exe) do if exist "%%F" (set "SHC=%%F" & set "SHKIND=glslang")
+goto :eof

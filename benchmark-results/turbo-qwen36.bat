@@ -7,6 +7,9 @@ rem   turbo-qwen36.bat              OpenAI-compatible server (coli serve)
 rem   turbo-qwen36.bat chat         interactive chat
 rem   turbo-qwen36.bat xpack        ONE TIME: write experts.q36x beside the model (~18 GB)
 rem   turbo-qwen36.bat bench        one direct run on prompt.txt -> bench-turbo-<n>.log
+rem   turbo-qwen36.bat long         the same with ~2k tokens of source code in (a coding
+rem                                 assistant's turn: time to first token is the number)
+rem   turbo-qwen36.bat selftest     the OpenAI API end to end: three chat turns, timed
 rem   turbo-qwen36.bat sweep        every config below, one run each, warm, with a
 rem                                 summary in sweep-<n>\summary.txt (build with
 rem                                 "build-turbo.bat vk" first: that binary runs both
@@ -75,6 +78,8 @@ if not exist "%COLI_ENGINE%" (
 )
 
 if /i "%~1"=="bench" goto bench
+if /i "%~1"=="long" goto long
+if /i "%~1"=="selftest" goto selftest
 if /i "%~1"=="sweep" goto sweep
 if /i "%~1"=="xpack" goto xpack
 if /i "%~1"=="chat" goto chat
@@ -87,6 +92,11 @@ shift
 call "%COLI_RUNTIME%\coli.cmd" chat --model "%SNAP%" --cap 0 %1 %2 %3 %4 %5 %6
 exit /b %ERRORLEVEL%
 
+:selftest
+rem the API a coding assistant talks to: server up, three chat turns timed, server down
+powershell -NoProfile -ExecutionPolicy Bypass -File "%HERE%serve-selftest.ps1"
+exit /b %ERRORLEVEL%
+
 :xpack
 rem one-time: writes %SNAP%\experts.q36x (about 18 GB), then runs a short generation from it
 set "Q36_XPACK_BUILD=1"
@@ -96,16 +106,31 @@ exit /b %ERRORLEVEL%
 
 :bench
 if "%N_NEW%"=="" set "N_NEW=128"
+if "%PROMPT%"=="" set "PROMPT=%HERE%prompt.txt"
 set "COLI_TIMERS=1"
 set "Q36_HEAT_WAIT=1"
 set /a "BN=1"
 :findlog
 if exist "%HERE%bench-turbo-%BN%.log" ( set /a "BN+=1" & goto findlog )
 echo Writing %HERE%bench-turbo-%BN%.log ...
-"%COLI_ENGINE%" 0 4 "%HERE%prompt.txt" > "%HERE%bench-turbo-%BN%.log" 2>&1
+"%COLI_ENGINE%" 0 4 "%PROMPT%" > "%HERE%bench-turbo-%BN%.log" 2>&1
 set "RC=%ERRORLEVEL%"
-findstr /c:"cache auto-sized" /c:"loader threads" /c:"Q36_HEAT" /c:"Speed:" /c:"hit rate" /c:"[timers]" /c:"[VK]" "%HERE%bench-turbo-%BN%.log"
+findstr /c:"cache auto-sized" /c:"loader threads" /c:"Q36_HEAT" /c:"Speed:" /c:"TTFT" /c:"prompt tokens" /c:"hit rate" /c:"[timers]" /c:"[VK]" "%HERE%bench-turbo-%BN%.log"
 exit /b %RC%
+
+:long
+rem a coding-assistant turn: ~2k tokens of source code in, a short answer out
+call :mklong
+set "PROMPT=%HERE%prompt-long.txt"
+if "%N_NEW%"=="" set "N_NEW=48"
+goto bench
+
+:mklong
+if exist "%HERE%prompt-long.txt" goto :eof
+> "%HERE%prompt-long.txt" echo Review the following C code from an inference engine. List the three most important bugs or risks, one line each.
+type "%SRC%\c\kv16.h" >> "%HERE%prompt-long.txt"
+type "%SRC%\c\pin_pool.h" >> "%HERE%prompt-long.txt"
+goto :eof
 
 :sweep
 if "%N_NEW%"=="" set "N_NEW=128"
@@ -117,16 +142,20 @@ if exist "%HERE%sweep-%SN%" ( set /a "SN+=1" & goto findsweep )
 set "SWEEP=%HERE%sweep-%SN%"
 mkdir "%SWEEP%"
 echo Sweep logs in %SWEEP% (N_NEW=%N_NEW%)
-call :one vk-before          "Q36_LOOKAHEAD=0" "Q36_XPACK=0" "COLI_VK_TIER_RESERVE_GB=1"
-call :one vk-head            "Q36_LOOKAHEAD=0" "Q36_XPACK=0"
-call :one vk-head-la1        "Q36_LOOKAHEAD=1" "Q36_XPACK=0"
-call :one vk-head-xpack      "Q36_LOOKAHEAD=0" "Q36_XPACK=1"
-call :one vk-turbo           "Q36_LOOKAHEAD=1" "Q36_XPACK=1"
-call :one vk-turbo-la2       "Q36_LOOKAHEAD=2" "Q36_XPACK=1"
-call :one vk-turbo-wide      "Q36_LOOKAHEAD=1" "Q36_XPACK=1" "Q36_LOOKAHEAD_EXTRA=8"
-call :one vk-turbo-ram92     "Q36_LOOKAHEAD=1" "Q36_XPACK=1" "Q36_RAM_FRAC=0.92"
-call :one cpu-turbo          "COLI_VULKAN=0" "Q36_LOOKAHEAD=1" "Q36_XPACK=1"
-call :one vk-turbo-lossy1    "Q36_LOOKAHEAD=1" "Q36_XPACK=1" "Q36_SKIP_MISS=0.06" "COLI_DENSE_BITS=4" "COLI_DENSE_INT4=lmhead"
+call :mklong
+set "PROMPT=%HERE%prompt.txt"
+set "LONG=%HERE%prompt-long.txt"
+call :one vk-tier            
+rem the expert tier off: the round-4 configuration (12.5 tok/s median)
+call :one vk-notier          "COLI_VK_TIER=0"
+call :one vk-tier-la2        "Q36_LOOKAHEAD=2"
+call :one vk-tier-hostpool   "COLI_VK_TIER_HOST="
+call :one vk-tier-ram92      "Q36_RAM_FRAC=0.92"
+call :one vk-tier-omp12      "OMP_NUM_THREADS=12"
+call :one long-vk-tier       "PROMPT=%LONG%" "N_NEW=48"
+call :one long-vk-notier     "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_TIER=0"
+call :one long-vk-hostpool   "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_TIER_HOST="
+call :one vk-tier-lossy1     "Q36_SKIP_MISS=0.06" "COLI_DENSE_BITS=4" "COLI_DENSE_INT4=lmhead"
 echo.
 echo ===== %SWEEP%\summary.txt =====
 type "%SWEEP%\summary.txt"
@@ -143,10 +172,10 @@ set "%~1"
 goto one_arg
 :one_go
 echo [%NAME%] running ...
-"%COLI_ENGINE%" 0 4 "%HERE%prompt.txt" > "%SWEEP%\%NAME%.log" 2>&1
+"%COLI_ENGINE%" 0 4 "%PROMPT%" > "%SWEEP%\%NAME%.log" 2>&1
 set "RC=%ERRORLEVEL%"
 >> "%SWEEP%\summary.txt" echo ---- %NAME% (exit %RC%)
-findstr /c:"Speed:" /c:"TTFT" /c:"hit rate" /c:"expert kernel" /c:"lm_head" /c:"step() total" /c:"cache auto-sized" /c:"expert cache" /c:"on the CPU (" /c:"Q36_SKIP_MISS:" /c:"Q36_LOOKAHEAD:" /c:"Q36_XPACK:" "%SWEEP%\%NAME%.log" >> "%SWEEP%\summary.txt"
+findstr /c:"Speed:" /c:"TTFT" /c:"prompt tokens" /c:"prefill:" /c:"hit rate" /c:"expert kernel" /c:"lm_head" /c:"step() total" /c:"cache auto-sized" /c:"expert cache" /c:"on the CPU (" /c:"tier qwen36" /c:"cannot open" /c:"Q36_SKIP_MISS:" /c:"Q36_LOOKAHEAD:" /c:"Q36_XPACK:" "%SWEEP%\%NAME%.log" >> "%SWEEP%\summary.txt"
 endlocal
 goto :eof
 
@@ -174,8 +203,10 @@ goto :eof
 :gpu_vk
 set "COLI_VULKAN=1"
 set "PILOT=0"
-rem the expert tier has no shaders on this PC: its 1 GiB VRAM reserve goes to the lm_head instead
+rem the chain and the lm_head first; the expert tier (shaders from build-turbo.bat vk) takes what is left
 if "%COLI_VK_TIER_RESERVE_GB%"=="" set "COLI_VK_TIER_RESERVE_GB=0.5"
+rem its RAM host pool would take RAM from the CPU's expert cache (91-95% hits): off unless measured better
+if "%COLI_VK_TIER_HOST%"=="" set "COLI_VK_TIER_HOST=0"
 goto :eof
 
 :gpu_cuda

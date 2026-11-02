@@ -164,6 +164,7 @@ c/qwen38_2p4t_tiny_c/
 # not vendored): the DeepSeek V4 DeepGEMM flavour's headers.
 c/third_party/deepgemm/
 c/third_party/Vulkan-Headers/
+c/third_party/glslang/
 
 # DLL flavours + MSVC import/export artifacts of the V4 CUDA tier (regenerated
 # by cuda-dsv4-dll / cuda-dsv4-dg-dll); the loader picks the DLL at runtime.

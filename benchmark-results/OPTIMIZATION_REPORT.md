@@ -501,3 +501,40 @@ The short `bench-turbo-21.log` smoke test also exited successfully after the
 launcher reset change, with stale lossy variables intentionally injected into
 the parent shell. No `Q36_SKIP_MISS` line appeared, confirming that
 `LOSSY=0` selected the quality path.
+
+## Round 6: Vulkan expert shaders, long prompts, API self-test (to run)
+
+The "missing Vulkan expert shaders" warning came from eight `.spv` files that the
+repo does not ship because they are gitignored build products (`qmatmul_gate_up`,
+`qmatmul_bd`, `qmatmul_gate_up_bd`, `expert_act`, `expert_act_v4`, `rmsnorm`,
+`attention_absorb`, `chain_dnconv_rows`). Without them the Vulkan expert tier
+turned itself off, so every routed expert ran on the CPU, including the 61-token
+prefill at 2.2 s. `build-turbo.bat vk` now compiles them. It uses glslc if
+installed, and otherwise downloads Khronos' glslang once into
+`c\third_party\glslang`. A shader that fails to compile is skipped and the
+engine runs as before.
+
+Changes:
+- Launcher `GPU=vk`: expert tier on, tier host pool off (`COLI_VK_TIER_HOST=0`),
+  so the RAM cache keeps its size.
+- Cross-layer lookahead now also runs on the Vulkan expert path. It skips
+  experts the device already holds.
+- `turbo-qwen36.bat long` runs a coding-assistant style turn (about 2k tokens of
+  C source plus an instruction). The number to watch is time to first token.
+- `turbo-qwen36.bat selftest` starts the OpenAI-compatible server, sends three
+  chat turns to `/v1/chat/completions`, prints tokens/s per turn, then stops the
+  server. Exit 0 means every turn was answered.
+- `sweep` adds the tier, no-tier, host-pool, and long-prompt configurations.
+
+Run:
+
+```bat
+git pull
+call c\build-turbo.bat vk
+set N_NEW=128
+call benchmark-results\turbo-qwen36.bat sweep
+call benchmark-results\turbo-qwen36.bat selftest
+```
+
+If decode speed drops with the tier on, `set COLI_VK_TIER=0` restores the
+round 5 configuration.

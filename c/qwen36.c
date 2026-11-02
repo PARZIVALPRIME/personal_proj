@@ -5167,7 +5167,8 @@ static void q36_lookahead(Model *m, int layer, const float *x) {
         for (int k = 0; k < n; k++) {
             const int64_t gidx = (int64_t)nl * E + ids[k];
             pthread_mutex_lock(&g_pilot_mx);
-            int have = slot_indexed(m, nl, ids[k]) != NULL || (m->loading && m->loading[gidx]);
+            int have = slot_indexed(m, nl, ids[k]) != NULL || (m->loading && m->loading[gidx]) ||
+                       vkt_ram_first(nl, ids[k]);   /* the Vulkan tier holds it: nothing to read */
             pthread_mutex_unlock(&g_pilot_mx);
             if (have) continue;
             const unsigned r = g_la_next % Q36_LA_RING;
@@ -6289,6 +6290,7 @@ static void moe_vk_run(Model *m, Layer *l, int layer, const float *x, int S, flo
         const float *xb = x + (int64_t)s0 * D; const int *ib = idx + (int64_t)s0 * K;
         const float *vb = val + (int64_t)s0 * K;
         int ndev = vkt_issue(layer, xb, rows, K, ib, taken);
+        if (s0 == 0 && S <= 8) q36_lookahead(m, layer, x);   /* while the device runs this layer's residents */
         for (int i = 0; i < n; i++) { want[i] = !taken[i]; if (taken[i]) ehit_mark(m, layer, ib[i]); }
         if (g_gguf) moe_vk_gq_cpu(m, layer, xb, rows, ib, want, ctb);
         else if (xf) moe_vk_xf_cpu(m, layer, xb, rows, ib, want, ctb);
