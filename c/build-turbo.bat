@@ -8,8 +8,8 @@ rem   build-turbo.bat cuda     + CUDA tier through coli_cuda.dll (RTX 3050). The
 rem                            DLL is copied from the installed 2.1.0 runtime, the
 rem                            same version as this source tree.
 rem   build-turbo.bat vk       + Vulkan trunk chain and expert tier (RTX 3050 through
-rem                            the NVIDIA Vulkan driver). Needs the Vulkan SDK
-rem                            headers (winget install KhronosGroup.VulkanSDK); the
+rem                            the NVIDIA Vulkan driver). Uses the Vulkan SDK headers
+rem                            if installed, else clones Khronos' Vulkan-Headers; the
 rem                            SPIR-V shaders are already in c\shaders.
 rem
 rem Overrides (set before calling): LLVM_MINGW (toolchain root), COLI_RUNTIME
@@ -39,12 +39,21 @@ if errorlevel 1 goto failed
 goto done
 
 :vk
-if "%VULKAN_SDK%"=="" (
-    echo ERROR: VULKAN_SDK is not set. Install the Vulkan SDK, open a new prompt, run again.>&2
+rem Only the Khronos headers are needed: the loader is opened at run time (vulkan-1.dll
+rem ships with the NVIDIA driver) and the SPIR-V shaders are committed in c\shaders.
+set "VKINC="
+if not "%VULKAN_SDK%"=="" if exist "%VULKAN_SDK%\Include\vulkan\vulkan.h" set "VKINC=%VULKAN_SDK%\Include"
+if "%VKINC%"=="" set "VKINC=%~dp0third_party\Vulkan-Headers\include"
+if not exist "%VKINC%\vulkan\vulkan.h" (
+    echo Fetching the Vulkan headers into c\third_party\Vulkan-Headers ...
+    git clone --depth 1 https://github.com/KhronosGroup/Vulkan-Headers "%~dp0third_party\Vulkan-Headers"
+)
+if not exist "%VKINC%\vulkan\vulkan.h" (
+    echo ERROR: no vulkan\vulkan.h under %VKINC%. Install the Vulkan SDK or git, then run again.>&2
     popd
     exit /b 1
 )
-set "VKF=-DCOLI_VULKAN -I"%VULKAN_SDK%\Include""
+set "VKF=-DCOLI_VULKAN -I"%VKINC%""
 echo Building qwen36.exe (CPU + Vulkan chain and tier) ...
 clang %CFL% %VKF% -c backend_vulkan.c -o backend_vulkan.o || goto failed
 clang %CFL% %VKF% -c vk_tier.c -o vk_tier.o || goto failed

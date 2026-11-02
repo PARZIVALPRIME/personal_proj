@@ -4121,12 +4121,11 @@ static void model_init_range(Model *m, const char *snap, int cap, int bits,
              * checkpoint (qwen36_embedding.h): the same f32 values as the table,
              * without the table in RAM (2 GB on the 35B). COLI_EMBED_MMAP=0 keeps
              * the table; a tensor it cannot map (another dtype or shape) falls
-             * back to it. A Vulkan run (COLI_VULKAN=1 in a VK=1 build, as
-             * q36_waligned tells) keeps the table: qwen36_chain.h rebuilds the
-             * state from it. */
+             * back to it. A Vulkan run reads them in place too: its device-lost
+             * rebuild gathers rows through q36_embed_row. */
             const char *embed_env = getenv("COLI_EMBED_MMAP");
-            int embed_native = quantize_dense && dense_bits() == 8 && !getenv("COLI_KEEP_F32") &&
-                               !(embed_env && *embed_env == '0') && !q36_waligned();
+            int embed_native = quantize_dense && dense_bits() != 16 && !getenv("COLI_KEEP_F32") &&
+                               !(embed_env && *embed_env == '0');
             char en[QW_DENSE_NAME_MAX];
             const char *ename = dense_resolve(m, "model.embed_tokens.weight", en, sizeof en);
             if (embed_native && qem_open(&m->embed_native, &m->S, ename, c->hidden, c->vocab))
@@ -4926,8 +4925,7 @@ static void *q36_io_worker(void *arg) {
         pthread_mutex_lock(&g_io_mx);
         j->slot = s; j->done = 1;
         pthread_cond_broadcast(&g_io_done_cv);
-        pthread_mutex_unlock(&g_io_mx);
-    }
+    }   /* g_io_mx stays held: the wait at the top of the loop needs it */
     return NULL;
 }
 /* the loaders, started at the first use; 0 = off */
@@ -5587,8 +5585,8 @@ static void moe_xf_run(Model *m, int layer, const float *x, int S, float *out, c
     if (par) {
         uid = malloc(sizeof(int) * (size_t)n); pu = malloc(sizeof(int) * (size_t)n); jmap = malloc(sizeof(int) * (size_t)n);
         uslot = malloc(sizeof(Slot *) * (size_t)n); jobs = malloc(sizeof(Q36IoJob) * (size_t)n);
-        ctb = n <= ovl_max ? falloc((int64_t)n * D) : NULL;
-        if (!uid || !pu || !jmap || !uslot || !jobs || (n <= ovl_max && !ctb)) { fprintf(stderr, "OOM moe_xf_run\n"); exit(1); }
+        ctb = falloc((int64_t)(n < ovl_max ? n : ovl_max) * D);   /* a split run has at most ovl_max pairs */
+        if (!uid || !pu || !jmap || !uslot || !jobs || !ctb) { fprintf(stderr, "OOM moe_xf_run\n"); exit(1); }
     }
     for (int s0 = 0, per; s0 < S; s0 += per) {
         per = per_max > 1 ? xf_rows_fit(idx, s0, S, K, room, per_max) : 1;
@@ -5605,7 +5603,7 @@ static void moe_xf_run(Model *m, int layer, const float *x, int S, float *out, c
                 pu[i] = u;
             }
             int nj = q36_hold_begin(m, layer, uid, nu, uslot, jobs, jmap);
-            const int split = nj > 0 && nj < nu && np <= ovl_max;   /* residents now, while the misses read */
+            const int split = ctb && nj > 0 && nj < nu && np <= ovl_max;   /* residents now, while the misses read */
             if (split) {
                 for (int i = 0; i < np; i++) if (pu[i] >= 0 && uslot[pu[i]]) { ex[i] = xf_slot_expert(m, uslot[pu[i]]); exp[i] = &ex[i]; }
                 double c0 = timed ? tm_now() : 0;
@@ -7182,6 +7180,7 @@ static void serve_echo(const char *id, int pos, int token, const float *lo, int 
 static float *g_hidden_sink = NULL;
 
 static void q36_seq_swap(Model *m, Q36Seq *q);   /* below: a chain swaps a conversation in to rebuild it */
+static void q36_embed_row(Model *m, int id, int pos, float *row);
 #ifdef COLI_VULKAN
 #include "qwen36_chain.h"  /* COLI_VK_CHAIN: every layer's dense chain on the device */
 #endif

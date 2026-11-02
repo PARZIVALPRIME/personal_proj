@@ -325,3 +325,34 @@ The next high-value work is to fix and benchmark parallel expert loading,
 install and test Vulkan, and add an output-quality comparison for lossy mode.
 Do not enable CUDA or Vulkan by default without an end-to-end speedup over the
 native CPU path.
+
+## Parallel loader crash: root cause and next round
+
+The access violation with `Q36_IO_THREADS=8` was in `moe_xf_run`, not in the
+loaders: a prefill run of 64 pairs or fewer took the overlapped
+residents-then-misses path, but its output buffer had only been allocated when
+the whole batch was that small, so a long prompt summed from a NULL pointer.
+The buffer is now always sized for 64 pairs and the path checks it. The extra
+`pthread_mutex_unlock` added to `q36_io_worker` was reverted: the worker keeps
+the queue mutex across the loop because the wait at its top needs it held.
+`Q36_IO_THREADS=8` is the launcher default again.
+
+Also changed for the next round:
+
+- Vulkan builds no longer need the SDK: `build-turbo.bat vk` clones the
+  Khronos headers when `VULKAN_SDK` is unset (shaders are committed).
+- A Vulkan run used to rebuild the 2 GB f32 embedding table in RAM; it now
+  reads the rows in place like the CPU run, so the trunk the GPU takes off the
+  host (about 1.9 GB) actually goes to the expert cache.
+- `COLI_DENSE_BITS=4` no longer rebuilds the f32 embedding table either, which
+  makes `LOSSY=1` (lm_head in int4) a RAM saving instead of a 2 GB loss.
+- `turbo-qwen36.bat sweep` runs every configuration once, warm, and writes
+  `sweep-<n>\summary.txt`.
+
+Run on the target:
+
+```cmd
+call c\build-turbo.bat vk
+set N_NEW=128
+call benchmark-results\turbo-qwen36.bat sweep
+```

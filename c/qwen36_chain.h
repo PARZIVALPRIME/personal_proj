@@ -179,7 +179,7 @@ static void q36c_recover(Model *m, int upto) {
     float *x = falloc((int64_t)upto * D);
     if (!ids) { fprintf(stderr, "OOM rebuilding the state\n"); exit(1); }
     memcpy(ids, m->kvp.fed, (size_t)upto * sizeof(int));
-    for (int s = 0; s < upto; s++) memcpy(x + (int64_t)s * D, m->embed + (int64_t)ids[s] * D, D * sizeof(float));
+    for (int s = 0; s < upto; s++) q36_embed_row(m, ids[s], s, x + (int64_t)s * D);
     /* a rebuild, not the verify being run: no copies, the batch's own matmuls */
     int snap = m->snap_rows, rowwise = g_q36_rowwise;
     m->snap_rows = 0; g_q36_rowwise = 0;
