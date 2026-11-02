@@ -2457,8 +2457,8 @@ static void vkprof_tick(void) {
 }
 
 static unsigned long long g_vk_matmul_calls;   /* successful coli_vk_matmul calls */
-static unsigned long long g_vk_gemm_calls;     /* ... of which through a tiled GEMM */
-static unsigned long long g_vk_coop_calls;     /* ... of which the cooperative-matrix one */
+static unsigned long long g_vk_gemm_calls __attribute__((unused));     /* ... of which through a tiled GEMM */
+static unsigned long long g_vk_coop_calls __attribute__((unused));     /* ... of which the cooperative-matrix one */
 
 /* VK_PROF=1: at exit, how the matmuls and their wall time (upload to readback) split
  * between the GEMV and the two tiled GEMMs. */
@@ -5460,9 +5460,11 @@ static int xb_record_submit(XbCtx *X, VkCommandBuffer cmd, VkFence fence, VkQuer
     }
 recorded:
     /* the host reads y after the fence */
-    VkMemoryBarrier hb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
-        .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT, .dstAccessMask = VK_ACCESS_HOST_READ_BIT};
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &hb, 0, NULL, 0, NULL);
+    {
+        VkMemoryBarrier hb = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER,
+            .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT, .dstAccessMask = VK_ACCESS_HOST_READ_BIT};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &hb, 0, NULL, 0, NULL);
+    }
     if (X->has_ts) vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, qp, 1);
     free(route);
     if (vkEndCommandBuffer(cmd) != VK_SUCCESS) return 0;
