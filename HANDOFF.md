@@ -28,9 +28,9 @@ One-time step: `turbo-qwen36.bat xpack` writes `experts.q36x` (about 18 GB) besi
 
 | | Start | Now |
 |---|---:|---:|
-| Decode | 1.83 tok/s | 14.8-16.0 tok/s |
+| Decode | 1.83 tok/s | 14.8-16.0 tok/s (15.29 in sweep-8) |
 | TTFT, 32-token prompt | several s | ~1.2 s |
-| TTFT, 5,338-token prompt | 81.6 s (sweep-1) | 21.4 s (sweep-7, 8192-row segments) |
+| TTFT, 5,338-token prompt | 81.6 s (sweep-1) | **19.1 s** (sweep-8, read-ahead on) |
 | Exits in the last sweeps | some failures | all exit 0 |
 
 Layer-by-layer prompt output was checked identical (hashed text) to chunk-by-chunk output,
@@ -51,8 +51,9 @@ on both the CPU and the GPU expert paths (sweep-6).
 8. Layer-major long prompts on the Vulkan chain (`q36c_forward_lm`, `Q36_VK_LAYERWISE`,
    `Q36_VK_LAYERWISE_ROWS`): each layer's experts run once over the whole prompt.
 9. Tier batch loads (`vk_load_batch`, `Q36_VK_LOAD_BATCH`), RAM-resident experts streamed first.
-10. Round 13 (pushed, NOT yet measured): read-ahead of each layer's misses while the GPU runs
-    its dense part (`Q36_RA`, `Q36_RA_N`), 8192-row segments by default, smaller prefill buffers.
+10. Round 13: read-ahead of each layer's misses while the GPU runs its dense part (`Q36_RA`,
+    `Q36_RA_N`), 8192-row segments by default, smaller prefill buffers. Sweep-8: 19.1 s with it,
+    21.3 s without (`Q36_RA=0`), 20.2 s with 256 buffers: 128 kept.
 
 Launcher defaults (`benchmark-results\turbo-qwen36.bat`): GPU=vk, tier for prompts only,
 `Q36_RAM_FRAC=0.92`, `Q36_MAXT=16384`, `COLI_LOOKUP=1`, quality mode (LOSSY=0).
@@ -62,15 +63,15 @@ Details per round: `benchmark-results/OPTIMIZATION_REPORT.md`.
 
 - Decode (~68 ms/token): ~38 ms GPU dense chain, ~20 ms CPU expert compute, ~12 ms expert fetch,
   92-94% cache hits.
-- Long prompt (21.4 s): ~7.7 s GPU dense (attention/DeltaNet), ~13.8 s experts (4.1 s GPU compute,
-  the rest loading ~5.7k experts and uploading them).
+- Long prompt (19.1 s, sweep-8): ~7 s GPU dense (attention/DeltaNet), ~11.9 s experts (about 4 s
+  GPU compute, the rest loading ~6k experts and uploading them). CPU-only experts: 40.8 s.
 
 Realistic targets on this hardware: decode 18-22 tok/s, 5.3k-token TTFT 14-17 s.
 Hard floors: decode ~25-30 tok/s, TTFT ~11-12 s.
 
 ## Next session
 
-1. Pull sweep-8; compare `long-vk` (read-ahead) vs `long-vk-nora` (21.4 s). Keep or revert `Q36_RA`.
+1. Done: sweep-8 kept `Q36_RA` (128 buffers). Start with item 2.
 2. Persist prompt state to disk for coding agents: the pin snapshots (`pin_save`,
    `q36_pin_state_save`: DeltaNet state) plus the KV rows, keyed by token prefix, so a repeated
    system prompt/tool list loads in ~1-2 s instead of a full prefill, also after a restart.
