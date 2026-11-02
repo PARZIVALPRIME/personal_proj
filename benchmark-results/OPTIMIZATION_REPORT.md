@@ -266,3 +266,34 @@ with **240.03 ms/token** fetch time and **123.83 ms/token** expert compute,
 versus the baseline's 1.35 tok/s median. It was therefore not enabled in the
 recommended configuration. The result indicates that this short workload's
 prefetch predictions and extra I/O contention do not hide SSD latency reliably.
+
+## Turbo launcher validation on this PC
+
+The turbo scripts were built and tested on the Ryzen 7 5800HS machine with the
+same model and `N_NEW=128`. The new parallel `Q36_IO_THREADS=8` path crashed
+with a Windows access violation during expert loading. The stable launcher now
+honors an explicit `Q36_IO_THREADS` value and defaults it to `0` for this
+safetensors build. The worker completion path also now releases its queue mutex
+after publishing a loaded slot. The existing model and rollback executable were
+preserved.
+
+Three stable native runs completed successfully:
+
+| Run | TTFT | Generation speed | Fetch | Compute | Cache hit |
+|---|---:|---:|---:|---:|---:|
+| Cold | 10.604 s | 2.19 tok/s | 223.08 ms/token | 36.22 ms/token | 76.9% |
+| Warm 1 | 4.173 s | 3.48 tok/s | 124.58 ms/token | 26.84 ms/token | 84.3% |
+| Warm 2 | 3.594 s | 3.71 tok/s | 112.75 ms/token | 26.68 ms/token | 86.6% |
+
+With `LOSSY=1` (`Q36_SKIP_MISS=0.06`, four experts always retained), the
+three runs measured 4.10, 5.04, and 5.22 tok/s. They skipped 1.1%, 0.7%, and
+0.5% of routed experts respectively. This is a speed/quality tradeoff and is
+not enabled by default.
+
+The requested Vulkan build could not be run because `VULKAN_SDK` is not set on
+this PC. No Vulkan executable or benchmark result is claimed. Install the
+Vulkan SDK and reopen the terminal before running `c\build-turbo.bat vk`.
+
+The raw turbo logs are `bench-turbo-1.log` through `bench-turbo-3.log` for the
+stable native runs and `bench-turbo-4.log` through `bench-turbo-6.log` for the
+lossy runs.

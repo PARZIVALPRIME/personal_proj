@@ -33,8 +33,9 @@ set "PATH=%SRC%\c;%LLVM_MINGW_BIN%;%COLI_RUNTIME%;%PATH%"
 
 rem --- CPU: 8 physical cores; SMT siblings are left to the expert loaders -------
 set "OMP_NUM_THREADS=8"
-rem --- SSD: a layer's misses read 8 at a time, residents computed meanwhile ------
-set "Q36_IO_THREADS=8"
+rem --- SSD: serialized reads are the stable default for this safetensors build.
+rem     Set Q36_IO_THREADS=8 explicitly only after validating the loader path.
+if "%Q36_IO_THREADS%"=="" set "Q36_IO_THREADS=0"
 rem --- RAM cache: sized from measured free RAM at the real slot size (cap 0) -----
 rem     segmented LRU keeps the experts routed again and again; the heat history
 rem     refills the cache at every start instead of starting cold

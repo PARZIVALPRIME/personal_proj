@@ -4926,6 +4926,7 @@ static void *q36_io_worker(void *arg) {
         pthread_mutex_lock(&g_io_mx);
         j->slot = s; j->done = 1;
         pthread_cond_broadcast(&g_io_done_cv);
+        pthread_mutex_unlock(&g_io_mx);
     }
     return NULL;
 }
