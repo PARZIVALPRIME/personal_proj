@@ -5854,6 +5854,127 @@ static XfExpert xf_slot_expert(Model *m, const Slot *e) {
  * would have evicted: the same loads, the same evictions, no pinned expert
  * given up for a run. */
 #define QWEN_XF_ROWS 256   /* rows per run at most: about 31 MB of scratch on the 35B */
+
+/* Q36_PF_EXPERT (default on): a prompt chunk's routed experts expert by expert. Runs of
+ * rows that fit the cache evicted experts the next run read again (a 5.3k-token prompt
+ * read 112 GB from the SSD); here each distinct expert is read at most once a pass, in
+ * groups of half the free cache, the next group's misses reading while this group
+ * computes. Every pair's output and the rank-order sum are the same bits as before. */
+static int q36_pf_expert_on(void) {
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Q36_PF_EXPERT"); v = !(e && *e == '0'); }
+    return v;
+}
+#define Q36_PF_ROWS 2048   /* rows a pass: their S*K outputs live at once (128 MB on the 35B) */
+#define Q36_PF_CALL 2048   /* (row, expert) pairs a kernel call */
+#define Q36_PF_GMAX 128
+/* kept between calls: a fresh 100 MB block costs its page faults again every layer */
+static void *q36_pf_buf(int which, size_t bytes) {
+    static _Thread_local void *p[3]; static _Thread_local size_t have[3];
+    if (have[which] < bytes) {
+        free(p[which]); p[which] = malloc(bytes); have[which] = p[which] ? bytes : 0;
+        if (!p[which]) { fprintf(stderr, "OOM moe_xf_prefill\n"); exit(1); }
+    }
+    return p[which];
+}
+static void q36_pf_flush(float *ctb, int *off, const float *xg, int nc, const int *cp, const int *cidx,
+                         const XfExpert **cexp, int *pos, int D, int F, int mode, void *scratch) {
+    xf_moe_compute(ctb + (int64_t)*off * D, xg, nc, 1, D, F, cidx, cexp, mode, scratch);
+    for (int j = 0; j < nc; j++) pos[cp[j]] = *off + j;
+    *off += nc;
+}
+static VktExpertSrc vk_slot_src(Model *m, int layer, Slot *e);
+/* want: the pairs to compute (NULL: all). pair_out: each pair's output at its index
+ * there, nothing summed (moe_vk_xf_cpu); NULL: val-weighted into out in rank order.
+ * note: every expert computed is offered to the Vulkan tier. */
+static void moe_xf_prefill(Model *m, int layer, const float *x, int S, float *out,
+                           const int *idx, const float *val, int room,
+                           const uint8_t *want, float *pair_out, int note) {
+    Cfg *c = &m->c; const int D = q36_eh(c), K = c->topk, F = c->inter, E = c->n_experts;
+    int G = room / 2; if (G > Q36_PF_GMAX) G = Q36_PF_GMAX; if (G < 1) G = 1;
+    const int SB = S < Q36_PF_ROWS ? S : Q36_PF_ROWS, mode = xf_run_mode(m);
+    float *ctb = q36_pf_buf(0, sizeof(float) * (size_t)SB * K * D);
+    float *xg = q36_pf_buf(1, sizeof(float) * (size_t)Q36_PF_CALL * D);
+    void *scratch = q36_pf_buf(2, xf_moe_scratch_bytes(Q36_PF_CALL, 1, D, F));
+    int *cnt = malloc(sizeof(int) * (size_t)E), *uid = malloc(sizeof(int) * (size_t)E);
+    int *ustart = malloc(sizeof(int) * (size_t)(E + 1)), *pairs = malloc(sizeof(int) * (size_t)SB * K);
+    int *pos = malloc(sizeof(int) * (size_t)SB * K), *cp = malloc(sizeof(int) * Q36_PF_CALL), *cidx = malloc(sizeof(int) * Q36_PF_CALL);
+    const XfExpert **cexp = malloc(sizeof(*cexp) * Q36_PF_CALL);
+    XfExpert *xfe = malloc(sizeof(XfExpert) * Q36_PF_GMAX);
+    Slot **hs[2]; Q36IoJob *jb[2]; int *jm[2], nj[2] = {0, 0};
+    for (int b = 0; b < 2; b++) {
+        hs[b] = malloc(sizeof(Slot *) * Q36_PF_GMAX); jb[b] = malloc(sizeof(Q36IoJob) * Q36_PF_GMAX); jm[b] = malloc(sizeof(int) * Q36_PF_GMAX);
+        if (!hs[b] || !jb[b] || !jm[b]) { fprintf(stderr, "OOM moe_xf_prefill\n"); exit(1); }
+    }
+    if (!cnt || !uid || !ustart || !pairs || !pos || !cp || !cidx || !cexp || !xfe) { fprintf(stderr, "OOM moe_xf_prefill\n"); exit(1); }
+    static int said;
+    if (!said) { said = 1; fprintf(stderr, "[qwen36] Q36_PF_EXPERT: a prompt chunk's experts each read once, %d at a time (Q36_PF_EXPERT=0: row runs)\n", G); }
+    for (int b0 = 0; b0 < S; b0 += SB) {
+        const int Sb = S - b0 < SB ? S - b0 : SB, n = Sb * K;
+        const int *bi = idx + (int64_t)b0 * K; const float *bv = val ? val + (int64_t)b0 * K : NULL;
+        const uint8_t *bw = want ? want + (int64_t)b0 * K : NULL;
+#define Q36_PF_PAIR(i) (bi[i] >= 0 && bi[i] < E && (!bw || bw[i]))
+        memset(cnt, 0, sizeof(int) * (size_t)E);
+        for (int i = 0; i < n; i++) if (Q36_PF_PAIR(i)) cnt[bi[i]]++;
+        int nu = 0;   /* the residents first: the first group holds them before a load can evict one */
+        for (int pass = 0; pass < 2; pass++)
+            for (int e = 0; e < E; e++)
+                if (cnt[e] && (expert_resident(m, layer, e) != 0) == (pass == 0)) uid[nu++] = e;
+        ustart[0] = 0;
+        for (int u = 0; u < nu; u++) ustart[u + 1] = ustart[u] + cnt[uid[u]];
+        for (int u = 0; u < nu; u++) cnt[uid[u]] = ustart[u];   /* now each expert's next free place in pairs[] */
+        for (int i = 0; i < n; i++) if (Q36_PF_PAIR(i)) pairs[cnt[bi[i]]++] = i;
+        const int ng = (nu + G - 1) / G;
+        int off = 0;
+        if (ng > 0) {
+            nj[0] = q36_hold_begin(m, layer, uid, nu < G ? nu : G, hs[0], jb[0], jm[0]);
+            q36_hold_finish(hs[0], jb[0], jm[0], nj[0]);
+        }
+        for (int g = 0; g < ng; g++) {
+            const int b = g & 1, u0 = g * G, gn = nu - u0 < G ? nu - u0 : G;
+            if (g + 1 < ng) {   /* the next group's misses read while this one computes */
+                const int u1 = u0 + G, gn1 = nu - u1 < G ? nu - u1 : G;
+                nj[b ^ 1] = q36_hold_begin(m, layer, uid + u1, gn1, hs[b ^ 1], jb[b ^ 1], jm[b ^ 1]);
+            }
+            for (int j = 0; j < gn; j++) xfe[j] = xf_slot_expert(m, hs[b][j]);
+            int nc = 0;
+            for (int u = u0; u < u0 + gn; u++)
+                for (int p = ustart[u]; p < ustart[u + 1]; p++) {
+                    const int i = pairs[p];
+                    cp[nc] = i; cidx[nc] = bi[i]; cexp[nc] = &xfe[u - u0];
+                    memcpy(xg + (int64_t)nc * D, x + (int64_t)(b0 + i / K) * D, sizeof(float) * (size_t)D);
+                    if (++nc == Q36_PF_CALL) { q36_pf_flush(ctb, &off, xg, nc, cp, cidx, cexp, pos, D, F, mode, scratch); nc = 0; }
+                }
+            if (nc) q36_pf_flush(ctb, &off, xg, nc, cp, cidx, cexp, pos, D, F, mode, scratch);
+            if (note)
+                for (int j = 0; j < gn; j++)
+                    if (vkt_wants(layer, uid[u0 + j])) { VktExpertSrc vs = vk_slot_src(m, layer, hs[b][j]); vkt_note(layer, uid[u0 + j], &vs); }
+            for (int j = 0; j < gn; j++) slot_release(hs[b][j]);
+            if (g + 1 < ng) q36_hold_finish(hs[b ^ 1], jb[b ^ 1], jm[b ^ 1], nj[b ^ 1]);
+        }
+        if (pair_out) {
+            #pragma omp parallel for schedule(static)
+            for (int i = 0; i < n; i++)
+                if (Q36_PF_PAIR(i)) memcpy(pair_out + ((int64_t)b0 * K + i) * D, ctb + (int64_t)pos[i] * D, sizeof(float) * (size_t)D);
+            continue;
+        }
+        /* xf_moe_add's rank-order sum */
+        #pragma omp parallel for schedule(static)
+        for (int s = 0; s < Sb; s++) {
+            float *os = out + (int64_t)(b0 + s) * D;
+            for (int k = 0; k < K; k++) {
+                const int i = s * K + k; if (!Q36_PF_PAIR(i)) continue;
+                const float w = bv[i], *cc = ctb + (int64_t)pos[i] * D;
+                for (int d = 0; d < D; d++) os[d] += w * cc[d];
+            }
+        }
+#undef Q36_PF_PAIR
+    }
+    for (int b = 0; b < 2; b++) { free(hs[b]); free(jb[b]); free(jm[b]); }
+    free(cnt); free(uid); free(ustart); free(pairs);
+    free(pos); free(cp); free(cidx); free(cexp); free(xfe);
+}
+
 static void moe_xf_run(Model *m, int layer, const float *x, int S, float *out, const int *idx, const float *val) {
     Cfg *c = &m->c; int D = q36_eh(c), K = c->topk, F = c->inter;
     int cap = m->cache[layer].cap;
@@ -5863,6 +5984,10 @@ static void moe_xf_run(Model *m, int layer, const float *x, int S, float *out, c
         pthread_mutex_lock(&g_pilot_mx);
         for (int i = 0; i < m->cache[layer].n; i++) room -= m->cache[layer].slots[i].pinned != 0;
         pthread_mutex_unlock(&g_pilot_mx);
+    }
+    if (S >= 64 && kper == K && room >= 2 * K && q36_pf_expert_on()) {
+        moe_xf_prefill(m, layer, x, S, out, idx, val, room, NULL, NULL, 0);
+        return;
     }
     int per_max = kper < K || room < K ? 1 : S < QWEN_XF_ROWS ? S : QWEN_XF_ROWS;   /* tokens per run, at most */
     int n = per_max * kper;
@@ -6203,6 +6328,13 @@ static void moe_vk_xf_cpu(Model *m, int layer, const float *x, int S, const int 
                           const uint8_t *want, float *ctb) {
     Cfg *c = &m->c; int D = q36_eh(c), K = c->topk, F = c->inter;
     int cap = m->cache[layer].cap;
+    if (S >= 64 && cap >= 2 * K && q36_pf_expert_on()) {   /* a prompt block: each expert read once */
+        int room = cap;
+        pthread_mutex_lock(&g_pilot_mx);
+        for (int i = 0; i < m->cache[layer].n; i++) room -= m->cache[layer].slots[i].pinned != 0;
+        pthread_mutex_unlock(&g_pilot_mx);
+        if (room >= 2 * K) { moe_xf_prefill(m, layer, x, S, NULL, idx, NULL, room, want, ctb, 1); return; }
+    }
     int per = cap >= S * K ? S : 1, kper = cap >= K ? K : 1, n = per * kper;
     XfExpert *ex = malloc(sizeof(XfExpert) * (size_t)n);
     const XfExpert **exp = malloc(sizeof(XfExpert *) * (size_t)n);

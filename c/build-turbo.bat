@@ -110,7 +110,7 @@ if not "%SHC%"=="" goto sh_have
 call :sh_find
 if not "%SHC%"=="" goto sh_have
 echo Fetching glslang, Khronos' reference shader compiler, into c\third_party\glslang ...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $z=Join-Path $env:TEMP 'coli-glslang.zip'; Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/KhronosGroup/glslang/releases/download/main-tot/glslang-main-windows-x86_64-release.zip' -OutFile $z; Expand-Archive -Force -Path $z -DestinationPath '%CD%\third_party\glslang'"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $z=Join-Path $env:TEMP 'coli-glslang.zip'; Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/KhronosGroup/glslang/releases/download/main-tot/glslang-main-windows-x86_64-release.zip' -OutFile $z; Expand-Archive -Force -Path $z -DestinationPath '%CD%\third_party\glslang'"
 call :sh_find
 if not "%SHC%"=="" goto sh_have
 echo WARNING: no shader compiler. The Vulkan expert tier stays off; install the Vulkan SDK>&2

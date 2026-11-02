@@ -567,3 +567,39 @@ call benchmark-results\turbo-qwen36.bat selftest
 
 If decode speed drops with the tier on, `set COLI_VK_TIER=0` restores the
 round 5 configuration.
+
+## Round 7: long-prompt prefill (to run)
+
+The 80 s TTFT for 5,338 tokens came from SSD reads, not compute. The long run had
+63,531 cache misses, about 112 GB read for one prompt. The prompt's routed experts
+ran in runs of rows that fit the free cache (about 140 experts a layer), while a
+1280-row chunk routes to nearly all 256. Each run evicted experts the next run read
+again: about 1,600 misses a layer against about 110 needed.
+
+`Q36_PF_EXPERT` (default on) now processes each chunk expert by expert. Every
+distinct expert is read at most once a chunk, in groups of half the free cache,
+and the next group's misses load while the current group computes. Each
+(token, expert) output and the rank-order sum are the same bits as before.
+`Q36_PF_EXPERT=0` restores the old path for an A/B. The Vulkan tier's CPU share
+of a prompt block uses the same routine; before, it went one row at a time.
+Expected: SSD traffic for the 5.3k prompt drops from about 112 GB to about 8-20 GB.
+
+Other changes:
+- `Q36_RAM_FRAC=0.92` is the launcher default (sweep-1's best, 16.09 tok/s).
+- The glslang download forces TLS 1.2. Windows PowerShell 5.1 can default to
+  an older protocol that GitHub refuses.
+- The launcher warns when the expert shaders are missing.
+- The sweep adds `long-vk-pf0` (old path), `long-vk-rows2560` (bigger chain
+  chunks, fewer re-reads), and `vk-tier-ram88`. It drops la2 and omp12, which
+  showed nothing.
+
+Save the build output too; it shows whether the shaders compiled:
+
+```bat
+git pull
+call c\build-turbo.bat vk > benchmark-results\build-vk.log 2>&1
+dir c\shaders\qmatmul_gate_up.spv
+set N_NEW=128
+call benchmark-results\turbo-qwen36.bat sweep
+call benchmark-results\turbo-qwen36.bat selftest
+```
