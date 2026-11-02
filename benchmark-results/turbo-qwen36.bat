@@ -49,6 +49,8 @@ rem     LRU, refilled from the heat history at every start
 set "Q36_EVICT=slru"
 set "Q36_SLRU_PROT=0.8"
 set "Q36_HEAT=1"
+rem --- 92% of the free RAM: median 15.7 tok/s over sweeps 1-4 against 14.8 at 88% ---
+if "%Q36_RAM_FRAC%"=="" set "Q36_RAM_FRAC=0.92"
 rem --- next layers' experts read while this layer computes ------------------------
 if "%Q36_LOOKAHEAD%"=="" set "Q36_LOOKAHEAD=1"
 rem --- experts.q36x: one unbuffered read per miss (build once: turbo-qwen36.bat xpack)
@@ -146,15 +148,13 @@ call :mklong
 set "PROMPT=%HERE%prompt.txt"
 set "LONG=%HERE%prompt-long.txt"
 call :one vk                 
-call :one vk-ram92           "Q36_RAM_FRAC=0.92"
+rem the tier for prompt chunks only (64+ rows), its cold experts streamed; decode on the CPU path
+call :one vk-tierpf          "COLI_VK_TIER=1" "Q36_VK_TIER_MIN_ROWS=64" "COLI_VK_TIER_EXCLUSIVE=0"
+call :one vk-ram88           "Q36_RAM_FRAC=0.88"
 call :one long-vk            "PROMPT=%LONG%" "N_NEW=48"
-rem bigger prompt chunks: each chunk re-reads the ~100 experts a layer the cache lacks
-call :one long-vk-rows2048   "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_CHAIN_ROWS=2048"
-call :one long-vk-rows2048-r25 "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_CHAIN_ROWS=2048" "COLI_VK_TIER_RESERVE_GB=0.25"
-call :one long-vk-rows5376   "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_CHAIN_ROWS=5376" "COLI_VK_TIER_RESERVE_GB=0.25" "Q36_PF_ROWS=5376"
-rem the prompt's misses 16 at a time; its expert GEMMs on all 16 hardware threads
-call :one long-vk-io16       "PROMPT=%LONG%" "N_NEW=48" "Q36_IO_THREADS=16"
-call :one long-vk-omp16      "PROMPT=%LONG%" "N_NEW=48" "OMP_NUM_THREADS=16"
+call :one long-vk-tierpf     "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_TIER=1" "Q36_VK_TIER_MIN_ROWS=64" "COLI_VK_TIER_EXCLUSIVE=0"
+rem the whole tier, decode too (sweep-2's 537 s TTFT was with the RAM leak)
+call :one long-vk-tier       "PROMPT=%LONG%" "N_NEW=48" "COLI_VK_TIER=1"
 echo.
 echo ===== %SWEEP%\summary.txt =====
 type "%SWEEP%\summary.txt"

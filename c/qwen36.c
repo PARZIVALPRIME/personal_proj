@@ -6590,6 +6590,13 @@ static void moe_gq_run(Model *m, int layer, const float *x, int S, float *out, c
     free(cnt); free(tok); free(wt); free(fill); free(X); free(G); free(U); free(Y);
 }
 
+/* Q36_VK_TIER_MIN_ROWS=n: the Vulkan tier takes only steps of n rows or more (a prompt's
+ * chunks); decode stays on the CPU path, which measured faster on a 4 GB card */
+static int q36_vk_min_rows(void) {
+    static int v = -1;
+    if (v < 0) { const char *e = getenv("Q36_VK_TIER_MIN_ROWS"); v = e && *e ? atoi(e) : 0; if (v < 0) v = 0; }
+    return v;
+}
 /* moe_ex: logits_in (the router's raw rows, S x E) when the caller already has them,
  * else NULL and the router runs here; routed_only = 1 leaves the shared expert out,
  * so `out` gets the routed experts' rank-order sum alone (the Vulkan dense chain runs
@@ -6639,7 +6646,7 @@ static void moe_ex(Model *m, Layer *l, int layer, float *x, int S, float *out,
     int use_qt = !use_gq && !use_qq && qt_rows;   /* a trunk-only tier leaves the experts to the paths below */
     /* the Vulkan tier takes the routed experts of every format it was given
      * (moe_vk_run): the routing is collected first, as for the shared kernel */
-    int use_vk = !use_gq && !use_qq && !use_qt && vkt_ready();
+    int use_vk = !use_gq && !use_qq && !use_qt && vkt_ready() && S >= q36_vk_min_rows();
     int use_xf = !use_gq && !use_qq && !use_qt && !use_vk && xf_mode(m);
     /* prefill re-plan: this layer's routing counts over the prompt rows */
     uint32_t *rp_cnt = (use_qt && S > 1 && prefill_replan_on()) ? calloc((size_t)E, sizeof(uint32_t)) : NULL;
