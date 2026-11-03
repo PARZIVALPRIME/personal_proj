@@ -1,5 +1,52 @@
 # Qwen3.6-35B-A3B turbo work: status and next steps
 
+## CURRENT STATE (read this first): moved from Windows to CachyOS Linux
+
+The target machine is now the same laptop booted into CachyOS (XFCE4). Same hardware (Ryzen 7 5800HS,
+RTX 3050 Laptop 4 GB, 16 GB RAM, NVMe). Model is at `~/colibri-models/qwen36-35b`, so always set `SNAP`.
+Engine is built with `make -C c qwen36 VK=1 -j"$(nproc)"`. Launcher: `benchmark-results/turbo-qwen36.sh`
+(Linux twin of `turbo-qwen36.bat`, same defaults). Vulkan finds the RTX 3050, all 40 layers on the GPU.
+
+### Linux results so far (bench-turbo-17937*.log) against Windows sweep-8
+
+| | Windows | Linux, no xpack |
+|---|---:|---:|
+| Decode | 14.8-16 tok/s | 9.77 (warm), 4.46 (cold) |
+| Expert fetch per token | ~12 ms | 28 ms warm, 79 ms cold |
+| TTFT 5,338 tokens | 19.1 s | 22.9 s warm, 30.2 s cold |
+| Warm-start read | 2.09 GB/s | 0.7-1.05 GB/s |
+
+Cause found: every log says `experts.q36x does not exist`. The packed store (Q36_XPACK, one unbuffered
+1.77 MB read per miss) was never built on Linux, so experts come from the original safetensors.
+Secondary: peak RSS 12-13 GB of 16 GB (desktop apps shrink the expert cache), and the usage/heat
+history (`.coli_usage`, `.q36_heat`) is still warming up.
+
+### DO THIS NEXT on the Linux machine, in this order
+
+```bash
+cd ~/personal_proj && git pull
+export SNAP=$HOME/colibri-models/qwen36-35b
+df -h "$SNAP"; free -h; lsblk -d -o NAME,ROTA,SIZE,MODEL      # need ~18 GB free; model must be on the NVMe
+benchmark-results/turbo-qwen36.sh xpack                      # ONE TIME, writes $SNAP/experts.q36x (~18 GB)
+ls -lh "$SNAP/experts.q36x"                                   # must be ~18 GB
+# close browser/heavy apps, then each twice (second run is warm):
+benchmark-results/turbo-qwen36.sh bench
+benchmark-results/turbo-qwen36.sh bench
+benchmark-results/turbo-qwen36.sh long
+benchmark-results/turbo-qwen36.sh long
+git add -f benchmark-results/bench-turbo-*.log
+git commit -m "linux bench after xpack" && git push origin main
+```
+
+Success check: the log must no longer say `experts.q36x does not exist`; target decode 14+ tok/s,
+fetch ~12 ms/token, 5.3k-token TTFT about 19-20 s. If still slow after xpack, try `OMP_NUM_THREADS=8`,
+`GPU=0` (CPU only), `powerprofilesctl set performance`, and report `vulkaninfo --summary`, `lscpu`, `free -h`.
+Plan after that: item 2 under "Next session" below (persist prompt state to disk).
+
+---
+
+# Windows-era status (previous machine setup)
+
 Handoff for the next session. Code is edited on a dev box with no compiler; it is built and
 run on the target PC, and results come back through git (`benchmark-results/sweep-N/`).
 
