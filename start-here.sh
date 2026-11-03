@@ -1,8 +1,7 @@
 #!/bin/sh
 # colibri: one-step setup and start for Linux and macOS.
 #
-#   ./start-here.sh
-#
+ #
 # First run: finds your hardware, recommends a model that fits, builds the
 # engine (with Vulkan or CUDA when a GPU is usable) or fetches a prebuilt one,
 # downloads the model (safe to interrupt: run this again to continue), then
