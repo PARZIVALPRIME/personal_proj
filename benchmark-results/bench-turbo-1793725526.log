@@ -1,0 +1,12 @@
+[OMP] qwen36: hot-thread tuning, re-exec once (COLI_NO_OMP_TUNE=1 to skip)
+colibri: this is the Qwen3.6 engine, and it was started without a model.
+The engine is not the program you run directly -- the launcher is:
+
+    ./coli chat  --model <model directory>    interactive chat
+    ./coli serve --model <model directory>    OpenAI-compatible API
+    ./coli web   --model <model directory>    API plus the dashboard
+    ./coli doctor --model <model directory>   check a model is usable
+
+The launcher needs Python 3 and picks the right engine for the model.
+(Running the engine by hand: SNAP=<model directory> ./qwen36 ...)
+Getting a model, step by step: https://github.com/JustVugg/colibri/blob/main/docs/quickstart.md
