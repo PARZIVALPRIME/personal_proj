@@ -7,7 +7,47 @@ RTX 3050 Laptop 4 GB, 16 GB RAM, NVMe). Model is at `~/colibri-models/qwen36-35b
 Engine is built with `make -C c qwen36 VK=1 -j"$(nproc)"`. Launcher: `benchmark-results/turbo-qwen36.sh`
 (Linux twin of `turbo-qwen36.bat`, same defaults). Vulkan finds the RTX 3050, all 40 layers on the GPU.
 
-### Linux results so far (bench-turbo-17937*.log) against Windows sweep-8
+### Latest verified target results: xpack is FIXED
+
+Commit `45d8fae` contains successful post-xpack CachyOS runs:
+
+| Metric | Windows sweep-8 | CachyOS post-xpack |
+|---|---:|---:|
+| Short reported speed | 15.29 tok/s | 16.42-16.74 tok/s |
+| Short TTFT | 1.218 s | 1.256-1.291 s |
+| 5,338-token TTFT | 19.121 s | 17.363-18.522 s |
+| Short expert fetch | 11.99 ms/token | 8.22-8.80 ms/token |
+
+`experts.q36x` is active. The old missing-pack diagnosis below is historical.
+Long-run Speed includes prefill, not decode-only throughput. Short/long answers
+were truncated by the 128/48-token limits; use completed coding tasks for quality.
+
+### DO THIS NEXT: controlled offline-prepared experiments
+
+Read [the exact CachyOS runbook](docs/CACHYOS-PERFORMANCE.md). The launcher now
+exports SNAP, propagates failures, isolates quality mode, leaves physical-core
+sizing to the engine and delegates experiments to `c/tools/q36_bench.py`.
+
+```bash
+cd ~/personal_proj
+git pull --ff-only
+export SNAP="$HOME/colibri-models/qwen36-35b"
+python3 -m unittest discover -s c/tests -p test_q36_bench.py -v
+bash benchmark-results/turbo-qwen36.sh doctor
+bash benchmark-results/turbo-qwen36.sh sweep --profiles baseline passive io4 --repeats 3
+```
+
+The runbook explains engine backup, optional forced rebuild, longer output tests,
+result review/sharing and rollback. Preserve the current binary before rebuilding.
+No new laptop speedup has been measured. No kernels, synchronization or prefix
+state formats have been changed blindly. Default cache/placement stays unchanged.
+
+Next implementation decisions need target evidence: CPU/GPU timing breakdown,
+CPU bandwidth/thread contention, decode-only misses, then prefix-state reuse audit.
+Q36 already has `kv_prefix_reuse`, `pin_save` and DeltaNet pin-state helpers;
+do not assume prefix reuse is absent or restart persistence is complete.
+
+### Historical pre-xpack Linux results against Windows sweep-8
 
 | | Windows | Linux, no xpack |
 |---|---:|---:|
@@ -16,12 +56,12 @@ Engine is built with `make -C c qwen36 VK=1 -j"$(nproc)"`. Launcher: `benchmark-
 | TTFT 5,338 tokens | 19.1 s | 22.9 s warm, 30.2 s cold |
 | Warm-start read | 2.09 GB/s | 0.7-1.05 GB/s |
 
-Cause found: every log says `experts.q36x does not exist`. The packed store (Q36_XPACK, one unbuffered
+In these old runs, every log said `experts.q36x does not exist`. The packed store (Q36_XPACK, one unbuffered
 1.77 MB read per miss) was never built on Linux, so experts come from the original safetensors.
 Secondary: peak RSS 12-13 GB of 16 GB (desktop apps shrink the expert cache), and the usage/heat
 history (`.coli_usage`, `.q36_heat`) is still warming up.
 
-### DO THIS NEXT on the Linux machine, in this order
+### Historical recovery commands (already completed; not the next experiment)
 
 ```bash
 cd ~/personal_proj && git pull

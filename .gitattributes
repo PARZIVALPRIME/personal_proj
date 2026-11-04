@@ -1,2 +1,5 @@
 # cmd.exe finds labels unreliably in LF-only batch files: keep CRLF on checkout.
 START-HERE.bat text eol=crlf
+benchmark-results/turbo-qwen36.sh text eol=lf
+c/tools/q36_bench.py text eol=lf
+c/tests/test_q36_bench.py text eol=lf

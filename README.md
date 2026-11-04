@@ -14,6 +14,12 @@ dense chain + lm_head, packed `experts.q36x` store with unbuffered reads, lookah
 and layer-major prompt processing, GPU expert tier for prompts, batch loads and read-ahead.
 Full history: [HANDOFF.md](HANDOFF.md) and [benchmark-results/OPTIMIZATION_REPORT.md](benchmark-results/OPTIMIZATION_REPORT.md).
 
+**Latest CachyOS post-xpack baseline:** 16.42-16.74 tok/s on the short benchmark,
+1.256-1.291 s short TTFT and 17.363-18.522 s TTFT for 5,338 input tokens.
+New controlled experiments and exact laptop commands:
+[CachyOS performance runbook](docs/CACHYOS-PERFORMANCE.md).
+The new tooling has local regression tests; no new laptop speedup has been measured.
+
 ## Run on CachyOS (Arch, XFCE4)
 
 Needs about 20 GB free disk for the model plus 18 GB for `experts.q36x`, and an NVMe drive.
@@ -48,14 +54,17 @@ CPU only: `make -C c qwen36 -j"$(nproc)"`. If `glslc` fails on a shader the comm
 ### 4. Download the model
 
 ```bash
-pip install --user -U huggingface_hub   # on Arch use a venv if pip refuses: python -m venv ~/.venv && . ~/.venv/bin/activate
-hf download Kreuzzelg/qwen36-35b-a3b-colibri-i4-gs64 --local-dir ~/Models/qwen36_i4_gs64
+python -m venv ~/.venv-colibri
+. ~/.venv-colibri/bin/activate
+pip install -U huggingface_hub
+hf download Kreuzzelg/qwen36-35b-a3b-colibri-i4-gs64 --local-dir ~/colibri-models/qwen36-35b
 ```
 
 ### 5. One-time expert pack
 
 ```bash
 chmod +x benchmark-results/turbo-qwen36.sh
+export SNAP="$HOME/colibri-models/qwen36-35b"
 benchmark-results/turbo-qwen36.sh xpack      # writes experts.q36x (~18 GB) next to the model
 ```
 
@@ -64,12 +73,17 @@ benchmark-results/turbo-qwen36.sh xpack      # writes experts.q36x (~18 GB) next
 ```bash
 benchmark-results/turbo-qwen36.sh            # OpenAI-compatible server
 benchmark-results/turbo-qwen36.sh chat       # interactive chat
-benchmark-results/turbo-qwen36.sh bench      # speed on prompt.txt
-benchmark-results/turbo-qwen36.sh long       # ~2k-token prompt, shows time to first token
+benchmark-results/turbo-qwen36.sh bench      # warm-up + 3 measured short runs
+benchmark-results/turbo-qwen36.sh long       # 5,338-token reference prompt
+benchmark-results/turbo-qwen36.sh doctor     # read-only hardware/runtime diagnostics
+benchmark-results/turbo-qwen36.sh sweep      # controlled thread/wait-policy comparisons
 ```
 
 Another model folder: `SNAP=/path/to/model benchmark-results/turbo-qwen36.sh`.
 Prefer a guided setup? `./start-here.sh` picks a model and builds for you.
+Benchmarks save full logs and JSON/CSV summaries under `benchmark-results/linux-*`.
+They fail explicitly on engine errors or missing required metrics. See the runbook
+for repeats, generation limits, optional profiles, telemetry and rollback.
 
 ### Defaults in the launcher
 
@@ -96,12 +110,14 @@ and `LLVM_MINGW_BIN` before calling.
 ## Push changes
 
 ```bash
-git add -A
+git add README.md benchmark-results/turbo-qwen36.sh
 git commit -m "Add README and Linux launcher"
 git push origin main
 ```
 
 Benchmark logs are gitignored; add them with `git add -f benchmark-results/sweep-N/*.log`.
+For new Linux experiments, review and add only the selected `linux-*` directory.
+Do not stage generated engine binaries, objects, shaders or web build output.
 
 ## License
 
