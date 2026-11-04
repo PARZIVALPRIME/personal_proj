@@ -27,6 +27,9 @@ were truncated by the 128/48-token limits; use completed coding tasks for qualit
 Read [the exact CachyOS runbook](docs/CACHYOS-PERFORMANCE.md). The launcher now
 exports SNAP, propagates failures, isolates quality mode, leaves physical-core
 sizing to the engine and delegates experiments to `c/tools/q36_bench.py`.
+Its [complete start-to-finish sequence](docs/CACHYOS-PERFORMANCE.md#complete-start-to-finish-sequence)
+covers receiving changes, preserving the binary, all experiments, log review and
+selective results pushing, including recovery when GitHub rejects development-machine pushes.
 
 ```bash
 cd ~/personal_proj

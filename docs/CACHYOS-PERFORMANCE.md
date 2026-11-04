@@ -53,6 +53,197 @@ semantics have not been changed blindly.
 Use Bash, AC power and a consistent desktop workload. Close heavy applications,
 but do not disable swap, delete heat history, or change global memory settings.
 
+### Complete start-to-finish sequence
+
+Follow A through F in order. Run blocks in a dedicated Bash terminal. Blocks B
+through D use `set -e` so an error stops the block rather than continuing with
+invalid results. Keep that terminal open: it holds the `SESSION` variable.
+The detailed sections below explain the same operations and optional experiments.
+
+#### A. Receive the changes
+
+On the development computer, the earlier push received HTTP 403. Until that is
+resolved, pulling on the laptop will **not** obtain the new tooling.
+
+On the development computer, from its repository, retry:
+
+```powershell
+git status -sb
+git push origin main
+```
+
+Only if that push succeeds, use this on the laptop:
+
+```bash
+cd ~/personal_proj
+git status --short
+git pull --ff-only
+test -f c/tools/q36_bench.py
+test -f docs/CACHYOS-PERFORMANCE.md
+```
+
+If Git reports local conflicts, stop and preserve the local edits; do not reset
+or force the pull. If those files are absent, do not proceed with the old launcher.
+
+**Alternative when development-computer pushing remains blocked:** export all
+local task commits using **Git Bash** on the development computer. Avoid
+PowerShell 5.1 redirection, which can change patch encoding:
+
+```bash
+git format-patch --stdout origin/main..HEAD > "$HOME/Downloads/cachyos-performance-series.patch"
+```
+
+Transfer that file to the laptop's Downloads directory. From a clean laptop
+checkout, apply it **instead of receiving those same commits through a pull**:
+
+```bash
+cd ~/personal_proj
+git status --short
+# Continue only if there are no local edits:
+git am "$HOME/Downloads/cachyos-performance-series.patch"
+```
+
+If application fails, stop and inspect `git status`; do not rerun it repeatedly.
+`git am --abort` cancels this patch application. Do not apply a series that has
+already arrived through Git. A later push from the laptop can publish the applied
+commits along with the results.
+
+#### B. Validate and preserve the known-good engine
+
+```bash
+(
+set -e
+cd ~/personal_proj
+export SNAP="$HOME/colibri-models/qwen36-35b"
+test -d "$SNAP"
+test -s "$SNAP/experts.q36x"
+test -x c/qwen36
+python3 -m unittest discover -s c/tests -p test_q36_bench.py -v
+bash -n benchmark-results/turbo-qwen36.sh
+mkdir -p benchmark-results/linux-known-good
+if [ ! -e benchmark-results/linux-known-good/qwen36 ]; then
+    cp -p c/qwen36 benchmark-results/linux-known-good/qwen36
+    sha256sum c/qwen36 > benchmark-results/linux-known-good/engine.sha256
+fi
+)
+```
+
+If the engine is missing, there is nothing to preserve: build using the fresh-build
+section below, then rerun B. If the packed store is missing, verify `SNAP` first;
+only then run `SNAP="$HOME/colibri-models/qwen36-35b" bash
+benchmark-results/turbo-qwen36.sh xpack` as one command and rerun B.
+
+#### C. Run diagnostics, baseline, sweep and longer outputs
+
+Create a new session directory outside your model directory:
+
+```bash
+cd ~/personal_proj
+export SNAP="$HOME/colibri-models/qwen36-35b"
+SESSION="benchmark-results/linux-session-$(date +%Y%m%d-%H%M%S)"
+mkdir "$SESSION"
+printf 'Session directory: %s\n' "$SESSION"
+```
+
+Then run this block. It uses the current engine; do not rebuild before collecting
+this baseline:
+
+```bash
+(
+set -e
+bash benchmark-results/turbo-qwen36.sh doctor --output "$SESSION/doctor"
+bash benchmark-results/turbo-qwen36.sh bench --repeats 3 --output "$SESSION/short"
+bash benchmark-results/turbo-qwen36.sh long --repeats 3 --output "$SESSION/long"
+bash benchmark-results/turbo-qwen36.sh sweep \
+  --profiles baseline threads6 io4 passive passive-io4 --repeats 3 \
+  --output "$SESSION/sweep"
+bash benchmark-results/turbo-qwen36.sh bench --tokens 512 --repeats 3 \
+  --output "$SESSION/sustained-short"
+bash benchmark-results/turbo-qwen36.sh long --tokens 256 --repeats 3 \
+  --output "$SESSION/sustained-long"
+)
+```
+
+If this stops, inspect the last printed result directory and its logs. Do not
+describe partial results as a completed sweep. Do not rerun into existing output
+directories; create a new `SESSION` or choose a new output directory.
+
+#### D. Optional fresh build and comparison
+
+Only after C completes and the backup exists:
+
+```bash
+(
+set -e
+make -B -C c qwen36 VK=1 ARCH=native -j4 > "$SESSION/build.log" 2>&1
+bash benchmark-results/turbo-qwen36.sh bench --repeats 3 \
+  --output "$SESSION/rebuilt-short"
+bash benchmark-results/turbo-qwen36.sh long --repeats 3 \
+  --output "$SESSION/rebuilt-long"
+)
+```
+
+If the build fails, read `"$SESSION/build.log"` and use the preserved engine via
+`COLI_ENGINE` as described under rollback. Do not stage rebuilt objects/shaders.
+
+#### E. Review what will be shared
+
+```bash
+printf 'Reviewing: %s\n' "$SESSION"
+find "$SESSION" -name summary.csv -print
+cat "$SESSION/sweep/summary.csv"
+find "$SESSION" -name '*.log' -print
+git status --short
+```
+
+Open the full engine logs, diagnostics and recorded environment before sharing.
+Remove private experiment data from the sharing selection if needed. Do not assume
+logs are safe merely because they contain benchmark output. Check failures, swap
+warnings, temperature/clocks, truncated answers, and all workload regressions.
+Do not install a profile solely because one reported Speed value is higher.
+
+#### F. Commit only the reviewed results and push
+
+First inspect existing staged files:
+
+```bash
+git diff --cached --name-only
+```
+
+If this lists unrelated staged changes, stop and separate them before continuing.
+Then stage just this reviewed session:
+
+```bash
+git add -f -- "$SESSION"
+git diff --cached --stat
+git diff --cached --name-only
+```
+
+Only after checking that list:
+
+```bash
+git commit -m "CachyOS controlled performance experiment results"
+git push origin main
+```
+
+If push fails with HTTP 403, your results remain committed locally; repository
+write access/authentication must be repaired. Do not share credentials in logs or
+chat. Retry `git push origin main` after access is restored.
+
+If push is rejected because the remote advanced, do not force-push. Check the
+worktree first. Build experiments may have changed tracked generated files.
+Preserve those local changes before any rebase. Once the worktree is clean:
+
+```bash
+git fetch origin
+git rebase origin/main
+git push origin main
+```
+
+Stop on conflicts rather than choosing an automatic destructive resolution.
+After a successful push, tell the reviewing assistant the session directory and
+commit ID from `git log -1 --oneline`.
+
 ### 1. Pull, test, preserve the current engine
 
 ```bash
