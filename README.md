@@ -18,8 +18,7 @@ Full history: [HANDOFF.md](HANDOFF.md) and [benchmark-results/OPTIMIZATION_REPOR
 1.256-1.291 s short TTFT and 17.363-18.522 s TTFT for 5,338 input tokens.
 New controlled experiments and exact laptop commands:
 [CachyOS performance runbook](docs/CACHYOS-PERFORMANCE.md).
-Start with its [complete pull-to-push sequence](docs/CACHYOS-PERFORMANCE.md#complete-start-to-finish-sequence),
-including patch transfer if development-machine pushing is denied.
+Follow its [numbered CachyOS XFCE4 pull-to-push steps](docs/CACHYOS-PERFORMANCE.md#complete-start-to-finish-sequence).
 The new tooling has local regression tests; no new laptop speedup has been measured.
 
 ## Run on CachyOS (Arch, XFCE4)
