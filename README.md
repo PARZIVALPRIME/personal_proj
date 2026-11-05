@@ -19,6 +19,9 @@ Full history: [HANDOFF.md](HANDOFF.md) and [benchmark-results/OPTIMIZATION_REPOR
 New controlled experiments and exact laptop commands:
 [CachyOS performance runbook](docs/CACHYOS-PERFORMANCE.md).
 Follow its [numbered CachyOS XFCE4 pull-to-push steps](docs/CACHYOS-PERFORMANCE.md#complete-start-to-finish-sequence).
+**Already ran the November 5 tests?** Use the [current seven-step memory comparison](docs/CACHYOS-PERFORMANCE.md#next-commands-for-this-already-tested-laptop)
+instead of repeating the full workflow. It explains what we are testing now,
+how to push the results, and what decision comes next.
 The new tooling has local regression tests; no new laptop speedup has been measured.
 
 ## Run on CachyOS (Arch, XFCE4)

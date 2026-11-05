@@ -19,6 +19,8 @@ The runner now has `ram80` / `threads6-ram80`, memory-warning counts and optiona
 `--stop-on-pressure`, plus explicit prompt path/output-limit metadata. No
 unmeasured combination is installed as the default. Follow the runbook's
 [focused next comparison](docs/CACHYOS-PERFORMANCE.md#next-commands-for-this-already-tested-laptop).
+That section now contains seven numbered steps from pull through results push,
+explicit reference settings, and the decision plan after the comparison.
 
 The target machine is now the same laptop booted into CachyOS (XFCE4). Same hardware (Ryzen 7 5800HS,
 RTX 3050 Laptop 4 GB, 16 GB RAM, NVMe). Model is at `~/colibri-models/qwen36-35b`, so always set `SNAP`.

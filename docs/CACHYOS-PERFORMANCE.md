@@ -44,28 +44,92 @@ reference: prompt amortization and cache access differ.
 
 ### Next commands for this already-tested laptop
 
-Use this focused sequence instead of repeating the full old sweep below. Run
-each command in the same Bash terminal and stop if it fails:
+**What we are doing now:** testing whether a smaller expert cache avoids RAM
+pressure without losing too much speed, and whether six compute threads remain
+beneficial. We are not changing kernels, quantization, routing or context size.
+No new settings become permanent automatically.
+
+Use steps 1-7 below instead of the original full workflow. Run them in the same
+Bash terminal on CachyOS XFCE4. Plug in AC power and stop if any command fails.
+
+#### 1. Pull the published changes
 
 ```bash
 cd ~/personal_proj
+git status --short
 git pull --ff-only
-export SNAP="$HOME/colibri-models/qwen36-35b"
-unset RAM_GB PROMPT N_NEW OMP_NUM_THREADS OMP_WAIT_POLICY GOMP_SPINCOUNT KMP_BLOCKTIME
-unset OMP_PLACES OMP_PROC_BIND
-python3 -m unittest discover -s c/tests -p test_q36_bench.py -v
-SESSION="benchmark-results/linux-memory-$(date +%Y%m%d-%H%M%S)"
-mkdir "$SESSION"
 ```
 
-Then compare the known six-thread candidate with a lower RAM fraction, using
-the same 256-output-token limit for each workload/profile:
+If Git reports conflicts, stop and preserve local work; do not force the pull.
+
+#### 2. Set a controlled comparison environment
+
+Close browsers and other heavy applications. Keep swap enabled.
+
+```bash
+export SNAP="$HOME/colibri-models/qwen36-35b"
+unset RAM_GB PROMPT N_NEW OMP_NUM_THREADS OMP_WAIT_POLICY GOMP_SPINCOUNT KMP_BLOCKTIME
+unset OMP_PLACES OMP_PROC_BIND COLI_NO_OMP_TUNE COLI_OMP_TUNED
+export GPU=vk LOSSY=0
+export Q36_RAM_FRAC=0.92 Q36_IO_THREADS=8 Q36_MAXT=16384
+export Q36_XPACK=1 Q36_HEAT=1 Q36_LOOKAHEAD=1 COLI_LOOKUP=1
+```
+
+This fixes the reference cache fraction at 0.92. The reduced-cache profiles will
+override it to 0.80 only for their own runs. Do not copy a previous experimental
+`COLI_ENGINE` override into this comparison; use your current working engine:
+
+```bash
+unset COLI_ENGINE
+test -d "$SNAP" && echo "Model directory OK"
+test -s "$SNAP/experts.q36x" && echo "Packed store OK"
+test -x c/qwen36 && echo "Engine OK"
+```
+
+All three checks must print `OK`.
+
+#### 3. Test the updated runner
+
+```bash
+python3 -m unittest discover -s c/tests -p test_q36_bench.py -v
+bash -n benchmark-results/turbo-qwen36.sh
+```
+
+The tests must finish with `OK`; Bash should report no syntax errors.
+
+#### 4. Create a new result directory
+
+```bash
+SESSION="benchmark-results/linux-memory-$(date +%Y%m%d-%H%M%S)"
+mkdir "$SESSION"
+printf 'Keep this terminal open. Results: %s\n' "$SESSION"
+```
+
+#### 5. Run the focused comparison and wait for completion
 
 ```bash
 bash benchmark-results/turbo-qwen36.sh sweep \
   --profiles threads6 ram80 threads6-ram80 --tokens 256 --repeats 3 \
   --output "$SESSION/comparison"
+```
+
+Only continue when the runner succeeds. On failure, inspect the last printed log;
+do not rerun into the same output directory.
+
+The same 256-output-token limit is used for both workloads and all profiles.
+The comparison is:
+
+| Profile | Compute threads | RAM fraction |
+|---|---|---:|
+| `threads6` | 6 | 0.92 |
+| `ram80` | Engine's physical-core default | 0.80 |
+| `threads6-ram80` | 6 | 0.80 |
+
+#### 6. Review the results before sharing
+
+```bash
 cat "$SESSION/comparison/summary.csv"
+find "$SESSION" -name '*.log' -print
 ```
 
 This makes 24 engine invocations including warm-ups. `ram80` changes only
@@ -93,16 +157,49 @@ OMP_NUM_THREADS=6 Q36_RAM_FRAC=0.80 \
   bash benchmark-results/turbo-qwen36.sh chat
 ```
 
-After reviewing logs for private data, share only the new comparison:
+#### 7. Commit and push only this comparison
+
+Review the full logs and diagnostics for private content first. Check for
+unrelated staged files:
 
 ```bash
 git diff --cached --name-only
-# Continue only if there are no unrelated staged files.
+```
+
+If that lists unrelated files, stop and separate them before continuing.
+Otherwise stage this session only:
+
+```bash
 git add -f -- "$SESSION"
 git diff --cached --stat
+git diff --cached --name-only
+```
+
+Verify only the intended result files are staged, then:
+
+```bash
 git commit -m "Compare Q36 memory headroom and six-thread configuration"
 git push origin main
+git log -1 --oneline
+printf 'Results folder: %s\n' "$SESSION"
 ```
+
+If pushing fails, the commit remains local; do not force-push. After a successful
+push, send the last commit ID and results-folder name to the reviewing assistant.
+Do not use `git add -A`.
+
+### What happens after these results
+
+1. Compare short and long runs separately: memory headroom, system swap activity,
+   TTFT, step time and completed output. A lower cache can trade hits for stability.
+2. Select a temporary configuration only if repeated results show an acceptable
+   speed/headroom trade-off. Do not assume the combined profile wins.
+3. If all profiles still have severe pressure, reduce cache further in a separate
+   controlled test; do not disable swap or allocate larger buffers.
+4. Once memory behavior is acceptable, measure CPU/GPU execution and waiting
+   separately before changing synchronization or kernels.
+5. Audit existing prefix/state reuse for repeated coding-agent prompts. That is
+   a separate latency improvement, not a raw decode-speed claim.
 
 Do not rebuild again just for this comparison: the uploaded rebuild succeeded,
 but did not remove memory pressure. Once the lower-cache trade-off is measured,
