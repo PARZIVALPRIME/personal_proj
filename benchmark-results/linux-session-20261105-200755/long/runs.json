@@ -1,0 +1,254 @@
+[
+  {
+    "label": "bench-baseline-r0",
+    "command": [
+      "/home/parzivalprime/personal_proj/c/qwen36",
+      "0",
+      "4",
+      "/home/parzivalprime/personal_proj/benchmark-results/prompt.txt"
+    ],
+    "environment": {
+      "COLI_CUDA": "0",
+      "COLI_ENGINE": "/home/parzivalprime/personal_proj/c/qwen36",
+      "COLI_LOOKUP": "1",
+      "COLI_TIMERS": "1",
+      "COLI_VK_SHADERS": "/home/parzivalprime/personal_proj/c/shaders",
+      "COLI_VK_TIER": "1",
+      "COLI_VK_TIER_EXCLUSIVE": "0",
+      "COLI_VK_TIER_HOST": "0",
+      "COLI_VK_TIER_RESERVE_GB": "0.5",
+      "COLI_VULKAN": "1",
+      "N_NEW": "128",
+      "PILOT": "0",
+      "Q36_EVICT": "slru",
+      "Q36_HEAT": "1",
+      "Q36_HEAT_WAIT": "1",
+      "Q36_IO_THREADS": "8",
+      "Q36_LOOKAHEAD": "1",
+      "Q36_MAXT": "16384",
+      "Q36_RAM_FRAC": "0.92",
+      "Q36_SLRU_PROT": "0.8",
+      "Q36_VK_TIER_MIN_ROWS": "64",
+      "Q36_XPACK": "1",
+      "SNAP": "/home/parzivalprime/colibri-models/qwen36-35b"
+    },
+    "engine_sha256": "ebef1cddd52f94930dd2b3d37eeea209404934b770159f6cf5ca5e1b5a1d5dcb",
+    "prompt_sha256": "8df7d5c42b8bcd2f84c0b01989e0e42c91ff835cf0b8e825d39b07c89c750755",
+    "started_utc": "2026-11-05T14:40:31.865427+00:00",
+    "exit_code": 0,
+    "timed_out": false,
+    "wall_s": 24.116546858999982,
+    "metrics": {
+      "ttft_s": 1.455,
+      "reported_speed_tps": 15.35,
+      "step_ms": 67.3,
+      "fetch_ms": 12.81,
+      "compute_ms": 20.47,
+      "cache_hit_pct": 96.1,
+      "peak_rss_gb": 12.7,
+      "tokens_per_forward": 1.1
+    },
+    "status": "ok",
+    "gpu_monitor": {
+      "stopped_by_runner": true
+    },
+    "system_memory": {
+      "min_available_kib": 1202240,
+      "pswpin_delta": 2,
+      "pswpout_delta": 0,
+      "pgmajfault_delta": 7
+    },
+    "profile": "baseline",
+    "workload": "bench",
+    "warmup": true
+  },
+  {
+    "label": "bench-baseline-r1",
+    "command": [
+      "/home/parzivalprime/personal_proj/c/qwen36",
+      "0",
+      "4",
+      "/home/parzivalprime/personal_proj/benchmark-results/prompt.txt"
+    ],
+    "environment": {
+      "COLI_CUDA": "0",
+      "COLI_ENGINE": "/home/parzivalprime/personal_proj/c/qwen36",
+      "COLI_LOOKUP": "1",
+      "COLI_TIMERS": "1",
+      "COLI_VK_SHADERS": "/home/parzivalprime/personal_proj/c/shaders",
+      "COLI_VK_TIER": "1",
+      "COLI_VK_TIER_EXCLUSIVE": "0",
+      "COLI_VK_TIER_HOST": "0",
+      "COLI_VK_TIER_RESERVE_GB": "0.5",
+      "COLI_VULKAN": "1",
+      "N_NEW": "128",
+      "PILOT": "0",
+      "Q36_EVICT": "slru",
+      "Q36_HEAT": "1",
+      "Q36_HEAT_WAIT": "1",
+      "Q36_IO_THREADS": "8",
+      "Q36_LOOKAHEAD": "1",
+      "Q36_MAXT": "16384",
+      "Q36_RAM_FRAC": "0.92",
+      "Q36_SLRU_PROT": "0.8",
+      "Q36_VK_TIER_MIN_ROWS": "64",
+      "Q36_XPACK": "1",
+      "SNAP": "/home/parzivalprime/colibri-models/qwen36-35b"
+    },
+    "engine_sha256": "ebef1cddd52f94930dd2b3d37eeea209404934b770159f6cf5ca5e1b5a1d5dcb",
+    "prompt_sha256": "8df7d5c42b8bcd2f84c0b01989e0e42c91ff835cf0b8e825d39b07c89c750755",
+    "started_utc": "2026-11-05T14:40:55.987580+00:00",
+    "exit_code": 0,
+    "timed_out": false,
+    "wall_s": 25.115291317000015,
+    "metrics": {
+      "ttft_s": 1.429,
+      "reported_speed_tps": 15.17,
+      "step_ms": 68.5,
+      "fetch_ms": 12.16,
+      "compute_ms": 20.63,
+      "cache_hit_pct": 96.2,
+      "peak_rss_gb": 12.7,
+      "tokens_per_forward": 1.1
+    },
+    "status": "ok",
+    "gpu_monitor": {
+      "stopped_by_runner": true
+    },
+    "system_memory": {
+      "min_available_kib": 1228448,
+      "pswpin_delta": 2,
+      "pswpout_delta": 0,
+      "pgmajfault_delta": 43
+    },
+    "profile": "baseline",
+    "workload": "bench",
+    "warmup": false
+  },
+  {
+    "label": "bench-baseline-r2",
+    "command": [
+      "/home/parzivalprime/personal_proj/c/qwen36",
+      "0",
+      "4",
+      "/home/parzivalprime/personal_proj/benchmark-results/prompt.txt"
+    ],
+    "environment": {
+      "COLI_CUDA": "0",
+      "COLI_ENGINE": "/home/parzivalprime/personal_proj/c/qwen36",
+      "COLI_LOOKUP": "1",
+      "COLI_TIMERS": "1",
+      "COLI_VK_SHADERS": "/home/parzivalprime/personal_proj/c/shaders",
+      "COLI_VK_TIER": "1",
+      "COLI_VK_TIER_EXCLUSIVE": "0",
+      "COLI_VK_TIER_HOST": "0",
+      "COLI_VK_TIER_RESERVE_GB": "0.5",
+      "COLI_VULKAN": "1",
+      "N_NEW": "128",
+      "PILOT": "0",
+      "Q36_EVICT": "slru",
+      "Q36_HEAT": "1",
+      "Q36_HEAT_WAIT": "1",
+      "Q36_IO_THREADS": "8",
+      "Q36_LOOKAHEAD": "1",
+      "Q36_MAXT": "16384",
+      "Q36_RAM_FRAC": "0.92",
+      "Q36_SLRU_PROT": "0.8",
+      "Q36_VK_TIER_MIN_ROWS": "64",
+      "Q36_XPACK": "1",
+      "SNAP": "/home/parzivalprime/colibri-models/qwen36-35b"
+    },
+    "engine_sha256": "ebef1cddd52f94930dd2b3d37eeea209404934b770159f6cf5ca5e1b5a1d5dcb",
+    "prompt_sha256": "8df7d5c42b8bcd2f84c0b01989e0e42c91ff835cf0b8e825d39b07c89c750755",
+    "started_utc": "2026-11-05T14:41:21.108666+00:00",
+    "exit_code": 0,
+    "timed_out": false,
+    "wall_s": 24.095714648000012,
+    "metrics": {
+      "ttft_s": 1.391,
+      "reported_speed_tps": 15.52,
+      "step_ms": 67.0,
+      "fetch_ms": 12.43,
+      "compute_ms": 20.51,
+      "cache_hit_pct": 96.3,
+      "peak_rss_gb": 12.69,
+      "tokens_per_forward": 1.1
+    },
+    "status": "ok",
+    "gpu_monitor": {
+      "stopped_by_runner": true
+    },
+    "system_memory": {
+      "min_available_kib": 1237364,
+      "pswpin_delta": 2,
+      "pswpout_delta": 0,
+      "pgmajfault_delta": 44
+    },
+    "profile": "baseline",
+    "workload": "bench",
+    "warmup": false
+  },
+  {
+    "label": "bench-baseline-r3",
+    "command": [
+      "/home/parzivalprime/personal_proj/c/qwen36",
+      "0",
+      "4",
+      "/home/parzivalprime/personal_proj/benchmark-results/prompt.txt"
+    ],
+    "environment": {
+      "COLI_CUDA": "0",
+      "COLI_ENGINE": "/home/parzivalprime/personal_proj/c/qwen36",
+      "COLI_LOOKUP": "1",
+      "COLI_TIMERS": "1",
+      "COLI_VK_SHADERS": "/home/parzivalprime/personal_proj/c/shaders",
+      "COLI_VK_TIER": "1",
+      "COLI_VK_TIER_EXCLUSIVE": "0",
+      "COLI_VK_TIER_HOST": "0",
+      "COLI_VK_TIER_RESERVE_GB": "0.5",
+      "COLI_VULKAN": "1",
+      "N_NEW": "128",
+      "PILOT": "0",
+      "Q36_EVICT": "slru",
+      "Q36_HEAT": "1",
+      "Q36_HEAT_WAIT": "1",
+      "Q36_IO_THREADS": "8",
+      "Q36_LOOKAHEAD": "1",
+      "Q36_MAXT": "16384",
+      "Q36_RAM_FRAC": "0.92",
+      "Q36_SLRU_PROT": "0.8",
+      "Q36_VK_TIER_MIN_ROWS": "64",
+      "Q36_XPACK": "1",
+      "SNAP": "/home/parzivalprime/colibri-models/qwen36-35b"
+    },
+    "engine_sha256": "ebef1cddd52f94930dd2b3d37eeea209404934b770159f6cf5ca5e1b5a1d5dcb",
+    "prompt_sha256": "8df7d5c42b8bcd2f84c0b01989e0e42c91ff835cf0b8e825d39b07c89c750755",
+    "started_utc": "2026-11-05T14:41:45.211131+00:00",
+    "exit_code": 0,
+    "timed_out": false,
+    "wall_s": 24.11582681699997,
+    "metrics": {
+      "ttft_s": 1.342,
+      "reported_speed_tps": 15.83,
+      "step_ms": 65.9,
+      "fetch_ms": 11.86,
+      "compute_ms": 20.4,
+      "cache_hit_pct": 96.5,
+      "peak_rss_gb": 12.75,
+      "tokens_per_forward": 1.1
+    },
+    "status": "ok",
+    "gpu_monitor": {
+      "stopped_by_runner": true
+    },
+    "system_memory": {
+      "min_available_kib": 1177332,
+      "pswpin_delta": 0,
+      "pswpout_delta": 0,
+      "pgmajfault_delta": 42
+    },
+    "profile": "baseline",
+    "workload": "bench",
+    "warmup": false
+  }
+]

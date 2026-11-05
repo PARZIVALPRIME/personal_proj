@@ -1,0 +1,82 @@
+make: Entering directory '/home/parzivalprime/personal_proj/c'
+gcc -O3 -march=native -fopenmp -pthread -Wall -Wextra -Wno-unused-parameter -Wno-misleading-indentation -Wno-unused-function  -MMD -MP -DCOLI_VULKAN -c backend_vulkan.c -o backend_vulkan.o
+gcc -O3 -march=native -fopenmp -pthread -Wall -Wextra -Wno-unused-parameter -Wno-misleading-indentation -Wno-unused-function  -MMD -MP -DCOLI_VULKAN -c vk_tier.c -o vk_tier.o
+gcc -O3 -march=native -fopenmp -pthread -Wall -Wextra -Wno-unused-parameter -Wno-misleading-indentation -Wno-unused-function  -MMD -MP -DCOLI_VULKAN -c vk_chain.c -o vk_chain.o
+glslc --target-env=vulkan1.2 shaders/qmatmul.comp -o shaders/qmatmul.spv
+glslc --target-env=vulkan1.2 shaders/qmatmul_gate_up.comp -o shaders/qmatmul_gate_up.spv
+glslc --target-env=vulkan1.2 shaders/qmatmul_bd.comp -o shaders/qmatmul_bd.spv
+glslc --target-env=vulkan1.2 shaders/qmatmul_gate_up_bd.comp -o shaders/qmatmul_gate_up_bd.spv
+glslc --target-env=vulkan1.2 shaders/attention_absorb.comp -o shaders/attention_absorb.spv
+glslc --target-env=vulkan1.2 shaders/rmsnorm.comp -o shaders/rmsnorm.spv
+glslc --target-env=vulkan1.2 shaders/qmatmul_gemm.comp -o shaders/qmatmul_gemm.spv
+glslc --target-env=vulkan1.2 shaders/qmatmul_coop.comp -o shaders/qmatmul_coop.spv || { [ -f shaders/qmatmul_coop.spv ] && touch shaders/qmatmul_coop.spv && \
+  echo "warning: glslc cannot compile shaders/qmatmul_coop.comp, keeping the committed shaders/qmatmul_coop.spv" >&2; }
+glslc --target-env=vulkan1.2 shaders/expert_act.comp -o shaders/expert_act.spv
+glslc --target-env=vulkan1.2 shaders/expert_act_v4.comp -o shaders/expert_act_v4.spv
+glslc --target-env=vulkan1.2 shaders/qmatmul_grp.comp -o shaders/qmatmul_grp.spv || { [ -f shaders/qmatmul_grp.spv ] && touch shaders/qmatmul_grp.spv && \
+  echo "warning: glslc cannot compile shaders/qmatmul_grp.comp, keeping the committed shaders/qmatmul_grp.spv" >&2; }
+glslc --target-env=vulkan1.2 -DGATE_UP shaders/qmatmul_grp.comp -o shaders/qmatmul_grp_gate_up.spv || { [ -f shaders/qmatmul_grp_gate_up.spv ] && touch shaders/qmatmul_grp_gate_up.spv && \
+  echo "warning: glslc cannot compile shaders/qmatmul_grp.comp, keeping the committed shaders/qmatmul_grp_gate_up.spv" >&2; }
+glslc --target-env=vulkan1.2 shaders/expert_sum.comp -o shaders/expert_sum.spv
+glslc --target-env=vulkan1.2 shaders/qmatmul_grp_gemv.comp -o shaders/qmatmul_grp_gemv.spv
+glslc --target-env=vulkan1.2 -DGATE_UP shaders/qmatmul_grp_gemv.comp -o shaders/qmatmul_grp_gemv_gate_up.spv
+glslc --target-env=vulkan1.2 shaders/chain_norm.comp -o shaders/chain_norm.spv
+glslc --target-env=vulkan1.2 shaders/chain_rope.comp -o shaders/chain_rope.spv
+glslc --target-env=vulkan1.2 shaders/chain_attn.comp -o shaders/chain_attn.spv
+glslc --target-env=vulkan1.2 shaders/chain_dnconv.comp -o shaders/chain_dnconv.spv
+glslc --target-env=vulkan1.2 shaders/chain_dnconv_rows.comp -o shaders/chain_dnconv_rows.spv
+glslc --target-env=vulkan1.2 shaders/chain_dnrec.comp -o shaders/chain_dnrec.spv
+glslc --target-env=vulkan1.2 shaders/chain_dnrec_rows.comp -o shaders/chain_dnrec_rows.spv
+glslc --target-env=vulkan1.2 shaders/chain_ew.comp -o shaders/chain_ew.spv
+glslc --target-env=vulkan1.2 shaders/chain_qsa.comp -o shaders/chain_qsa.spv
+glslc --target-env=vulkan1.2 shaders/chain_ple.comp -o shaders/chain_ple.spv
+glslc --target-env=vulkan1.2 shaders/chain_gemv.comp -o shaders/chain_gemv.spv
+glslc --target-env=vulkan1.2 shaders/chain_attn_dec.comp -o shaders/chain_attn_dec.spv
+glslc --target-env=vulkan1.2 shaders/chain_mla_dec.comp -o shaders/chain_mla_dec.spv
+glslc --target-env=vulkan1.2 shaders/chain_mla.comp -o shaders/chain_mla.spv
+glslc --target-env=vulkan1.2 shaders/chain_hgemv.comp -o shaders/chain_hgemv.spv
+glslc --target-env=vulkan1.2 shaders/chain_dsa.comp -o shaders/chain_dsa.spv
+glslc --target-env=vulkan1.2 shaders/chain_kda.comp -o shaders/chain_kda.spv
+glslc --target-env=vulkan1.2 -DROWS shaders/chain_kda.comp -o shaders/chain_kda_rows.spv
+glslc --target-env=vulkan1.2 shaders/chain_mhc.comp -o shaders/chain_mhc.spv
+glslc --target-env=vulkan1.2 shaders/chain_gemv2.comp -o shaders/chain_gemv2.spv
+glslc --target-env=vulkan1.2 shaders/chain_dsv4.comp -o shaders/chain_dsv4.spv
+glslc --target-env=vulkan1.2 shaders/chain_ares.comp -o shaders/chain_ares.spv
+glslc --target-env=vulkan1.2 shaders/chain_route.comp -o shaders/chain_route.spv
+glslc --target-env=vulkan1.2 shaders/chain_fetch.comp -o shaders/chain_fetch.spv
+glslc --target-env=vulkan1.2 shaders/chain_moe.comp -o shaders/chain_moe.spv
+glslc --target-env=vulkan1.2 shaders/chain_moe_gv.comp -o shaders/chain_moe_gv.spv
+glslc --target-env=vulkan1.2 -DIDOT shaders/chain_moe.comp -o shaders/chain_moe_i8.spv || { [ -f shaders/chain_moe_i8.spv ] && touch shaders/chain_moe_i8.spv && \
+  echo "warning: glslc cannot compile shaders/chain_moe.comp, keeping the committed shaders/chain_moe_i8.spv" >&2; }
+glslc --target-env=vulkan1.2 shaders/chain_moe_rows.comp -o shaders/chain_moe_rows.spv
+glslc --target-env=vulkan1.2 shaders/chain_gemv_bd.comp -o shaders/chain_gemv_bd.spv
+glslc --target-env=vulkan1.2 shaders/qmatmul_gemm_bd.comp -o shaders/qmatmul_gemm_bd.spv
+glslc --target-env=vulkan1.2 -DIDOT shaders/chain_gemv_bd.comp -o shaders/chain_gemv_bd_i8.spv || { [ -f shaders/chain_gemv_bd_i8.spv ] && touch shaders/chain_gemv_bd_i8.spv && \
+  echo "warning: glslc cannot compile shaders/chain_gemv_bd.comp, keeping the committed shaders/chain_gemv_bd_i8.spv" >&2; }
+glslc --target-env=vulkan1.2 shaders/qmatmul_grp_bd.comp -o shaders/qmatmul_grp_bd.spv
+glslc --target-env=vulkan1.2 -DGATE_UP shaders/qmatmul_grp_bd.comp -o shaders/qmatmul_grp_gate_up_bd.spv
+glslc --target-env=vulkan1.2 shaders/qmatmul_gemm_bdc.comp -o shaders/qmatmul_gemm_bdc.spv
+glslc --target-env=vulkan1.2 shaders/qmatmul_gemm_bdcw.comp -o shaders/qmatmul_gemm_bdcw.spv
+glslc --target-env=vulkan1.2 shaders/qmatmul_grp_bdc.comp -o shaders/qmatmul_grp_bdc.spv
+glslc --target-env=vulkan1.2 -DGATE_UP shaders/qmatmul_grp_bdc.comp -o shaders/qmatmul_grp_gate_up_bdc.spv
+glslc --target-env=vulkan1.2 shaders/qmatmul_grp_bdcw.comp -o shaders/qmatmul_grp_bdcw.spv
+glslc --target-env=vulkan1.2 -DGATE_UP shaders/qmatmul_grp_bdcw.comp -o shaders/qmatmul_grp_gate_up_bdcw.spv
+glslc --target-env=vulkan1.2 shaders/qmatmul_grp_q.comp -o shaders/qmatmul_grp_q.spv
+glslc --target-env=vulkan1.2 -DGATE_UP shaders/qmatmul_grp_q.comp -o shaders/qmatmul_grp_gate_up_q.spv
+glslc --target-env=vulkan1.2 shaders/qmatmul_grp_qc.comp -o shaders/qmatmul_grp_qc.spv
+glslc --target-env=vulkan1.2 -DGATE_UP shaders/qmatmul_grp_qc.comp -o shaders/qmatmul_grp_gate_up_qc.spv
+glslc --target-env=vulkan1.2 shaders/chain_sconv.comp -o shaders/chain_sconv.spv
+glslc --target-env=vulkan1.2 shaders/chain_relattn.comp -o shaders/chain_relattn.spv
+glslc --target-env=vulkan1.2 shaders/chain_attnb.comp -o shaders/chain_attnb.spv
+glslc --target-env=vulkan1.2 shaders/chain_copy2d.comp -o shaders/chain_copy2d.spv
+glslc --target-env=vulkan1.2 shaders/chain_gemm.comp -o shaders/chain_gemm.spv || { [ -f shaders/chain_gemm.spv ] && touch shaders/chain_gemm.spv && \
+  echo "warning: glslc cannot compile shaders/chain_gemm.comp, keeping the committed shaders/chain_gemm.spv" >&2; }
+glslc --target-env=vulkan1.2 shaders/chain_kvs.comp -o shaders/chain_kvs.spv
+glslc --target-env=vulkan1.2 shaders/chain_enc.comp -o shaders/chain_enc.spv
+glslc --target-env=vulkan1.2 shaders/chain_attn_flash.comp -o shaders/chain_attn_flash.spv || { [ -f shaders/chain_attn_flash.spv ] && touch shaders/chain_attn_flash.spv && \
+  echo "warning: glslc cannot compile shaders/chain_attn_flash.comp, keeping the committed shaders/chain_attn_flash.spv" >&2; }
+glslc --target-env=vulkan1.2 shaders/chain_attn_full.comp -o shaders/chain_attn_full.spv
+glslc --target-env=vulkan1.2 shaders/chain_attn_coop.comp -o shaders/chain_attn_coop.spv
+glslc --target-env=vulkan1.2 shaders/chain_vae.comp -o shaders/chain_vae.spv
+gcc -O3 -march=native -fopenmp -pthread -Wall -Wextra -Wno-unused-parameter -Wno-misleading-indentation -Wno-unused-function -MMD -MP -DCOLI_VULKAN qwen36.c     backend_vulkan.o vk_tier.o vk_chain.o -o qwen36 -lm -fopenmp -pthread -ldl
+make: Leaving directory '/home/parzivalprime/personal_proj/c'
