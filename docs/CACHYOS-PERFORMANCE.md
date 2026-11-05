@@ -10,6 +10,107 @@ Run each numbered block in order in that same terminal. Keep it open.
 **If any command fails, stop and save the error before continuing.**
 Do not delete model files or expert history, disable swap, or change GPU drivers.
 
+## Where we are after the November 5 results
+
+Results commit: `64f0e5e`, directory
+`benchmark-results/linux-session-20261105-200755`.
+
+| Measured sweep profile | Short Speed median | Short step median | Long TTFT median |
+|---|---:|---:|---:|
+| Baseline | 15.74 tok/s | 65.5 ms | 16.207 s |
+| Six compute threads | 17.15 tok/s | 59.7 ms | 16.265 s |
+| Four I/O threads | 16.52 tok/s | 62.2 ms | 16.164 s |
+| Passive waits | 16.20 tok/s | 64.4 ms | 16.519 s |
+
+Six threads are the best measured short-run candidate, not proof of a universal
+best configuration. Do not combine six compute/four loader threads and claim
+their separate gains add up. Passive waiting is not the next default.
+
+**The immediate issue is memory pressure.** The 256-token long runs reached only
+83,240 KiB system MemAvailable in one run and up to 832,430 system swap-out pages
+in another. These counters are system-wide; they establish pressure during the
+workload, not ownership of every swapped page. Long decode step medians rose to
+102.5 ms. The current 0.92 RAM fraction leaves inadequate headroom in these runs.
+Do not disable swap; test a smaller expert cache instead.
+
+The folder named `long` actually contains `bench` runs with 128 output tokens.
+Use `sweep/long-*`, `sustained-long/long-*` and `rebuilt-long/long-*` for long-prompt
+analysis. The runner now records explicit prompt path, requested output length,
+and prompt-token count when emitted by the engine.
+
+The sustained short benchmark reached 19.91 reported tok/s, but uses 512 output
+tokens instead of 128. It is not a directly comparable improvement over the short
+reference: prompt amortization and cache access differ.
+
+### Next commands for this already-tested laptop
+
+Use this focused sequence instead of repeating the full old sweep below. Run
+each command in the same Bash terminal and stop if it fails:
+
+```bash
+cd ~/personal_proj
+git pull --ff-only
+export SNAP="$HOME/colibri-models/qwen36-35b"
+unset RAM_GB PROMPT N_NEW OMP_NUM_THREADS OMP_WAIT_POLICY GOMP_SPINCOUNT KMP_BLOCKTIME
+unset OMP_PLACES OMP_PROC_BIND
+python3 -m unittest discover -s c/tests -p test_q36_bench.py -v
+SESSION="benchmark-results/linux-memory-$(date +%Y%m%d-%H%M%S)"
+mkdir "$SESSION"
+```
+
+Then compare the known six-thread candidate with a lower RAM fraction, using
+the same 256-output-token limit for each workload/profile:
+
+```bash
+bash benchmark-results/turbo-qwen36.sh sweep \
+  --profiles threads6 ram80 threads6-ram80 --tokens 256 --repeats 3 \
+  --output "$SESSION/comparison"
+cat "$SESSION/comparison/summary.csv"
+```
+
+This makes 24 engine invocations including warm-ups. `ram80` changes only
+`Q36_RAM_FRAC=0.80`; `threads6-ram80` additionally selects six compute threads.
+Neither changes quantization, routing, context size, global memory settings or
+permanent defaults. The reduced cache may increase fetches: that is an explicit
+trade-off to measure against swap avoidance and desktop usability.
+
+Inspect `memory_warning_runs` and the swap/minimum-memory columns, not just speed.
+The runner warns on system swap activity and available memory below 512 MiB.
+Warnings do not exclude runs or stop the default comparison. For a deliberately
+strict run, add `--stop-on-pressure`; it saves results and exits 2 after the first
+affected run, including warm-up. Background-process swap can also trigger it.
+
+If even the reduced-cache runs swap heavily, stop adding optimizations. Close
+unnecessary applications and retest a smaller RAM fraction explicitly, rather
+than growing buffers or disabling swap. `RAM_GB` must remain unset because the
+engine gives it precedence over the fraction.
+
+For temporary chat with additional desktop headroom, this is a conservative
+**unmeasured combination**, not a proven faster configuration:
+
+```bash
+OMP_NUM_THREADS=6 Q36_RAM_FRAC=0.80 \
+  bash benchmark-results/turbo-qwen36.sh chat
+```
+
+After reviewing logs for private data, share only the new comparison:
+
+```bash
+git diff --cached --name-only
+# Continue only if there are no unrelated staged files.
+git add -f -- "$SESSION"
+git diff --cached --stat
+git commit -m "Compare Q36 memory headroom and six-thread configuration"
+git push origin main
+```
+
+Do not rebuild again just for this comparison: the uploaded rebuild succeeded,
+but did not remove memory pressure. Once the lower-cache trade-off is measured,
+the next engineering task remains GPU/CPU timing instrumentation, followed by
+an audit of existing prefix/state reuse. Neither is a substitute for adequate RAM.
+
+## Original full workflow
+
 ### 1. Pull the code
 
 ```bash

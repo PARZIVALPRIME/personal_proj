@@ -202,6 +202,39 @@ class BenchTests(unittest.TestCase):
         self.assertEqual(bench.counter("pswpout 42\n", "pswpout"), 42)
         self.assertIsNone(bench.counter(None, "pswpout"))
 
+    def test_memory_pressure_is_not_hidden(self):
+        self.assertEqual(bench.memory_warnings({
+            "min_available_kib": 1024 * 1024, "pswpin_delta": 0, "pswpout_delta": 0,
+        }), [])
+        warnings = bench.memory_warnings({
+            "min_available_kib": 83000, "pswpin_delta": 10, "pswpout_delta": 100,
+        })
+        self.assertEqual(len(warnings), 2)
+        self.assertIn("512 MiB", warnings[0])
+
+    def test_ram_override_comparison_is_rejected(self):
+        with mock.patch.dict(os.environ, {**self.env, "RAM_GB": "14"}), \
+                mock.patch.object(bench, "diagnostics", return_value={}), \
+                contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(ValueError, "unset RAM_GB"):
+                bench.main(["sweep", "--profiles", "baseline", "ram80",
+                            "--output", str(self.base / "override")])
+
+    def test_stop_on_pressure_saves_run_and_stops_before_next_profile(self):
+        out = self.base / "pressure"
+        with mock.patch.dict(os.environ, self.env), \
+                mock.patch.object(bench, "diagnostics", return_value={}), \
+                mock.patch.object(bench, "run_once", return_value={
+                    "status": "ok", "metrics": {}, "exit_code": 0,
+                    "warnings": ["memory pressure"],
+                }) as run, contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            code = bench.main(["sweep", "--profiles", "baseline", "threads6",
+                               "--stop-on-pressure", "--output", str(out)])
+        self.assertEqual(code, 2)
+        self.assertEqual(run.call_count, 1)
+        self.assertTrue((out / "runs.json").is_file())
+
 
 @unittest.skipUnless(BASH, "Bash is required for launcher integration tests")
 class LauncherTests(unittest.TestCase):

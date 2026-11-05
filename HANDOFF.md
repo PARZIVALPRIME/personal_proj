@@ -2,6 +2,24 @@
 
 ## CURRENT STATE (read this first): moved from Windows to CachyOS Linux
 
+### November 5: controlled results received, memory pressure is next
+
+Pulled `64f0e5e` and reviewed `benchmark-results/linux-session-20261105-200755`.
+Six compute threads improved the sweep's short median from 15.74 to 17.15 tok/s
+(step 65.5 -> 59.7 ms); passive waiting is not a clear winner. Long TTFT is about
+16.2 s, but sustained long runs have major memory pressure: minimum available
+83,240 KiB, swap-out up to 832,430 system pages, decode step median 102.5 ms.
+System-wide swap cannot identify ownership, but it invalidates a claim of
+comfortable desktop headroom. Keep swap enabled; compare reduced expert caching.
+
+The `long/` directory accidentally contains short `bench` runs. Actual long
+workloads exist under `sweep/`, `sustained-long/` and `rebuilt-long/`.
+
+The runner now has `ram80` / `threads6-ram80`, memory-warning counts and optional
+`--stop-on-pressure`, plus explicit prompt path/output-limit metadata. No
+unmeasured combination is installed as the default. Follow the runbook's
+[focused next comparison](docs/CACHYOS-PERFORMANCE.md#next-commands-for-this-already-tested-laptop).
+
 The target machine is now the same laptop booted into CachyOS (XFCE4). Same hardware (Ryzen 7 5800HS,
 RTX 3050 Laptop 4 GB, 16 GB RAM, NVMe). Model is at `~/colibri-models/qwen36-35b`, so always set `SNAP`.
 Engine is built with `make -C c qwen36 VK=1 -j"$(nproc)"`. Launcher: `benchmark-results/turbo-qwen36.sh`

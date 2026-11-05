@@ -32,8 +32,11 @@ PROFILES = {
     },
     "bind": {"OMP_PLACES": "cores", "OMP_PROC_BIND": "close"},
     "ram88": {"Q36_RAM_FRAC": "0.88"},
+    "ram80": {"Q36_RAM_FRAC": "0.80"},
+    "threads6-ram80": {"OMP_NUM_THREADS": "6", "Q36_RAM_FRAC": "0.80"},
 }
 METRICS = {
+    "prompt_tokens": r"\[enc\] prompt tokens:\s*(\d+)",
     "ttft_s": r"TTFT:\s*([\d.]+)\s*s",
     "reported_speed_tps": r"Speed:\s*([\d.]+)\s*tok/s",
     "step_ms": r"step\(\) total:\s*([\d.]+)\s*ms/token",
@@ -65,7 +68,7 @@ def selected_environment(env):
     prefixes = ("Q36_", "QWEN", "COLI_", "OMP_", "GOMP_", "KMP_", "VK_")
     return {
         k: v for k, v in sorted(env.items())
-        if k.startswith(prefixes) or k in ("SNAP", "N_NEW", "RAM_GB", "PILOT")
+        if k.startswith(prefixes) or k in ("SNAP", "N_NEW", "RAM_GB", "PILOT", "PROMPT")
     }
 
 
@@ -105,6 +108,16 @@ def sample_system(pid=None):
 def counter(text, key):
     match = re.search(rf"^{re.escape(key)}\s*:?\s+(\d+)", text or "", re.MULTILINE)
     return int(match[1]) if match else None
+
+
+def memory_warnings(memory):
+    warnings = []
+    available = memory.get("min_available_kib")
+    if available is not None and available < 512 * 1024:
+        warnings.append("System MemAvailable fell below 512 MiB; result is memory-pressure affected.")
+    if memory.get("pswpin_delta", 0) or memory.get("pswpout_delta", 0):
+        warnings.append("System swap activity occurred; counters are system-wide, not engine-only.")
+    return warnings
 
 
 @contextmanager
@@ -197,6 +210,8 @@ def run_once(env, prompt, output, label, timeout, monitor_gpu=True):
     command = [str(engine), "0", "4", str(prompt)]
     record = {
         "label": label, "command": command, "environment": selected_environment(env),
+        "prompt_path": str(prompt.resolve()),
+        "requested_output_tokens": int(env["N_NEW"]) if env.get("N_NEW") else None,
         "engine_sha256": sha256(engine), "prompt_sha256": sha256(prompt),
         "started_utc": datetime.now(timezone.utc).isoformat(),
     }
@@ -257,6 +272,9 @@ def run_once(env, prompt, output, label, timeout, monitor_gpu=True):
     if swap_out:
         print(f"WARNING: {label}: system swapped out {swap_out} pages; "
               "this is system-wide, not proof the engine caused it.", file=sys.stderr)
+    record["warnings"] = memory_warnings(record["system_memory"])
+    for warning in record["warnings"]:
+        print(f"WARNING: {label}: {warning}", file=sys.stderr)
     if code == 0 and not complete:
         record["error"] = "engine exited 0 without required TTFT and Speed metrics"
     write_json(output / f"{label}.json", record)
@@ -276,6 +294,7 @@ def summarize(records):
         row = {
             "profile": profile, "workload": workload,
             "valid_runs": len(valid), "failed_runs": sum(r["status"] != "ok" for r in measured),
+            "memory_warning_runs": sum(bool(r.get("warnings")) for r in valid),
         }
         for key in METRICS:
             values = [r["metrics"][key] for r in valid if key in r["metrics"]]
@@ -316,6 +335,8 @@ def main(argv=None):
     parser.add_argument("--no-warmup", action="store_true")
     parser.add_argument("--no-gpu-monitor", action="store_true",
                         help="disable nvidia-smi sampling for overhead comparisons")
+    parser.add_argument("--stop-on-pressure", action="store_true",
+                        help="stop after any run with low available memory or system swap activity")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     env = dict(os.environ)
@@ -335,6 +356,8 @@ def main(argv=None):
         return 0
     workloads = args.workloads if args.mode == "sweep" else [args.mode]
     profiles = list(dict.fromkeys(args.profiles)) if args.mode == "sweep" else ["baseline"]
+    if env.get("RAM_GB") and any("Q36_RAM_FRAC" in PROFILES[p] for p in profiles):
+        raise ValueError("unset RAM_GB before RAM-fraction comparisons: it overrides Q36_RAM_FRAC")
     prompts = {w: Path(env["PROMPT"]) if env.get("PROMPT") else
                RESULTS / ("prompt-long.txt" if w == "long" else "prompt.txt") for w in workloads}
     for prompt in prompts.values():
@@ -366,6 +389,10 @@ def main(argv=None):
                 if record["status"] != "ok":
                     print(f"ERROR: stopping; inspect {output / (label + '.log')}", file=sys.stderr)
                     return record["exit_code"] if record["exit_code"] > 0 else 1
+                if args.stop_on_pressure and record.get("warnings"):
+                    print("ERROR: stopping after memory pressure; results are saved. "
+                          "Close heavy applications or test a smaller cache.", file=sys.stderr)
+                    return 2
     print("Summary: " + str(output / "summary.csv"))
     for row in summarize(records):
         print(f"{row['workload']} / {row['profile']}: {row['valid_runs']} measured runs; "
