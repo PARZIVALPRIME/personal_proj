@@ -3,26 +3,20 @@
 Runs Qwen3.6-35B-A3B (int4, 256 experts, top-8) on a 16 GB RAM laptop with a 4 GB GPU by
 streaming experts from NVMe. Measured on Ryzen 7 5800HS + RTX 3050 Laptop 4 GB:
 
-| | Start | Now |
+| | Start | Now (CachyOS) |
 |---|---:|---:|
-| Decode | 1.83 tok/s | 14.8-16.0 tok/s |
-| TTFT, 32-token prompt | several s | ~1.2 s |
-| TTFT, 5,338-token prompt | 81.6 s | 19.1 s |
+| Short prompt, 256 tokens out | 1.83 tok/s | 18.5 tok/s |
+| TTFT, 32-token prompt | several s | ~1.4 s |
+| TTFT, 5,338-token prompt | 81.6 s | 16.5 s |
 
 What was optimized: parallel expert loaders, segmented-LRU cache with heat warm start, Vulkan
 dense chain + lm_head, packed `experts.q36x` store with unbuffered reads, lookahead, expert-major
-and layer-major prompt processing, GPU expert tier for prompts, batch loads and read-ahead.
+and layer-major prompt processing, GPU expert tier for prompts, batch loads and read-ahead,
+6 compute threads and an expert cache sized to keep ~1.4 GiB RAM free (measured on CachyOS).
 Full history: [HANDOFF.md](HANDOFF.md) and [benchmark-results/OPTIMIZATION_REPORT.md](benchmark-results/OPTIMIZATION_REPORT.md).
 
-**Latest CachyOS post-xpack baseline:** 16.42-16.74 tok/s on the short benchmark,
-1.256-1.291 s short TTFT and 17.363-18.522 s TTFT for 5,338 input tokens.
-New controlled experiments and exact laptop commands:
-[CachyOS performance runbook](docs/CACHYOS-PERFORMANCE.md).
-Follow its [numbered CachyOS XFCE4 pull-to-push steps](docs/CACHYOS-PERFORMANCE.md#complete-start-to-finish-sequence).
-**Already ran the November 5 tests?** Use the [current seven-step memory comparison](docs/CACHYOS-PERFORMANCE.md#next-commands-for-this-already-tested-laptop)
-instead of repeating the full workflow. It explains what we are testing now,
-how to push the results, and what decision comes next.
-The new tooling has local regression tests; no new laptop speedup has been measured.
+**CachyOS: where we are, the plan, daily coding use and this round's pull-to-push steps:**
+[docs/CACHYOS-PERFORMANCE.md](docs/CACHYOS-PERFORMANCE.md).
 
 ## Run on CachyOS (Arch, XFCE4)
 
@@ -75,12 +69,13 @@ benchmark-results/turbo-qwen36.sh xpack      # writes experts.q36x (~18 GB) next
 ### 6. Run
 
 ```bash
-benchmark-results/turbo-qwen36.sh            # OpenAI-compatible server
+benchmark-results/turbo-qwen36.sh            # OpenAI-compatible server (keep it running for coding)
 benchmark-results/turbo-qwen36.sh chat       # interactive chat
+benchmark-results/turbo-qwen36.sh agent      # 4-turn coding-agent test: per-turn TTFT, prefix reuse
 benchmark-results/turbo-qwen36.sh bench      # warm-up + 3 measured short runs
 benchmark-results/turbo-qwen36.sh long       # 5,338-token reference prompt
 benchmark-results/turbo-qwen36.sh doctor     # read-only hardware/runtime diagnostics
-benchmark-results/turbo-qwen36.sh sweep      # controlled thread/wait-policy comparisons
+benchmark-results/turbo-qwen36.sh sweep      # controlled configuration comparisons
 ```
 
 Another model folder: `SNAP=/path/to/model benchmark-results/turbo-qwen36.sh`.
@@ -91,7 +86,9 @@ for repeats, generation limits, optional profiles, telemetry and rollback.
 
 ### Defaults in the launcher
 
-`Q36_IO_THREADS=8`, `Q36_EVICT=slru`, `Q36_HEAT=1`, `Q36_RAM_FRAC=0.92`, `Q36_LOOKAHEAD=1`,
+`OMP_NUM_THREADS=6`, `Q36_RAM_FRAC=0.80` (both measured best on the laptop; `OMP_NUM_THREADS=auto`
+and `Q36_RAM_FRAC=0.92` restore the previous behaviour), `Q36_IO_THREADS=8`, `Q36_EVICT=slru`,
+`Q36_HEAT=1`, `Q36_LOOKAHEAD=1`,
 `Q36_XPACK=1`, `Q36_MAXT=16384`, `COLI_LOOKUP=1`, Vulkan trunk, GPU expert tier for prompts only
 (`Q36_VK_TIER_MIN_ROWS=64`), `COLI_VK_TIER_RESERVE_GB=0.5`.
 

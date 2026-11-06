@@ -235,6 +235,31 @@ class BenchTests(unittest.TestCase):
         self.assertEqual(run.call_count, 1)
         self.assertTrue((out / "runs.json").is_file())
 
+    def test_previous_profile_unsets_thread_override(self):
+        env = bench.profile_env({"OMP_NUM_THREADS": "6", "Q36_RAM_FRAC": "0.80", "X": "1"},
+                                "previous")
+        self.assertNotIn("OMP_NUM_THREADS", env)
+        self.assertEqual(env["Q36_RAM_FRAC"], "0.92")
+        self.assertEqual(env["X"], "1")
+        self.assertEqual(bench.profile_env({"A": "1"}, "baseline"), {"A": "1"})
+
+    def test_vulkan_chain_metrics_and_profile_lines(self):
+        log = ("[VK] qwen36 chain: 251 forwards, 20873 frames (189102 ops), 11966.7 ms waiting "
+               "for the device, 17280.2 ms of routed experts on the host, 0 layer steps\n"
+               "[VK] chain profile: 812.5 ms of device time | GEMV int8 400.0 ms (10)\n")
+        values = bench.parse_metrics(log)
+        self.assertEqual(values["vk_forwards"], 251)
+        self.assertEqual(values["vk_wait_ms"], 11966.7)
+        self.assertEqual(values["vk_host_experts_ms"], 17280.2)
+        self.assertEqual(values["vk_profile_device_ms"], 812.5)
+
+    def test_profile_lines_are_kept_in_run_record(self):
+        record = self.run_engine_fixture(
+            f"print({OUTPUT!r}); print('[VK] chain profile: 5.0 ms of device time | norm 5.0 ms (2)')")
+        self.assertEqual(record["vk_profile"],
+                         ["[VK] chain profile: 5.0 ms of device time | norm 5.0 ms (2)"])
+        self.assertEqual(record["metrics"]["vk_profile_device_ms"], 5.0)
+
 
 @unittest.skipUnless(BASH, "Bash is required for launcher integration tests")
 class LauncherTests(unittest.TestCase):
@@ -297,6 +322,40 @@ class LauncherTests(unittest.TestCase):
                     [BASH, "-c", 'cygpath -m "$1"', "test", actual],
                     text=True, capture_output=True, check=True).stdout.strip()
             self.assertEqual(Path(actual), model)
+
+    def _engine_env(self, **overrides):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            model = base / "model"
+            model.mkdir()
+            engine = base / "engine.sh"
+            engine.write_text(
+                '#!/usr/bin/env bash\n'
+                'printf "THREADS=%s\\nRAM=%s\\nIO=%s\\n" "${OMP_NUM_THREADS-unset}" '
+                '"$Q36_RAM_FRAC" "$Q36_IO_THREADS"\n', encoding="utf-8")
+            engine.chmod(0o755)
+            env = {**os.environ, "SNAP": model.as_posix(), "COLI_ENGINE": engine.as_posix(),
+                   "GPU": "vk", "LOSSY": "0"}
+            for key in ("OMP_NUM_THREADS", "Q36_RAM_FRAC", "Q36_IO_THREADS"):
+                env.pop(key, None)
+            env.update(overrides)
+            result = subprocess.run(
+                [BASH, (ROOT / "benchmark-results" / "turbo-qwen36.sh").as_posix(), "xpack"],
+                env=env, text=True, capture_output=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout
+
+    def test_measured_defaults_are_six_threads_and_smaller_cache(self):
+        out = self._engine_env()
+        self.assertIn("THREADS=6", out)
+        self.assertIn("RAM=0.80", out)
+        self.assertIn("IO=8", out)
+
+    def test_explicit_overrides_and_auto_threads(self):
+        out = self._engine_env(OMP_NUM_THREADS="auto", Q36_RAM_FRAC="0.92")
+        self.assertIn("THREADS=unset", out)
+        self.assertIn("RAM=0.92", out)
+        self.assertIn("THREADS=7", self._engine_env(OMP_NUM_THREADS="7"))
 
 
 if __name__ == "__main__":

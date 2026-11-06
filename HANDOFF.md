@@ -2,7 +2,30 @@
 
 ## CURRENT STATE (read this first): moved from Windows to CachyOS Linux
 
-### November 5: controlled results received, memory pressure is next
+### November 7: memory comparison done, new defaults, round 3 is next
+
+Pulled `35bd4da` (`benchmark-results/linux-memory-20261107-000107`, 256 tokens out,
+medians of 3). Six threads + `Q36_RAM_FRAC=0.80`: short 18.52 tok/s, long TTFT
+16.457 s, long decode step 62.6 ms, >=1.41 GiB free. Six threads at 0.92: short
+19.81 tok/s but long TTFT 18.14 s, 129 MiB free and up to 226,580 pages swapped.
+**The launcher now defaults to `OMP_NUM_THREADS=6` and `Q36_RAM_FRAC=0.80`**
+(`OMP_NUM_THREADS=auto`, `Q36_RAM_FRAC=0.92` restore the old behaviour; the runner's
+`previous` profile does the same).
+
+Remaining decode step (long, 62.6 ms): expert fetch 10.8, expert compute 18.3,
+outside the expert timers 33.1 ms. Next round (all commands in
+[docs/CACHYOS-PERFORMANCE.md](docs/CACHYOS-PERFORMANCE.md)):
+1. `turbo-qwen36.sh agent`: persistent server, 4 streamed coding turns over the 5.3k-token
+   context, per-turn TTFT and the engine's `[PREFIX]` reuse lines (`COLI_PREFIX_LOG=1`).
+   The server already reuses the state when the history is resent; thinking is off by
+   default through the API. Check that turns 2-4 actually reuse.
+2. Defaults vs previous sweep at 256 tokens.
+3. Vulkan chain profile with the engine's own `COLI_VK_CHAIN_PROF=2` (control runs without
+   it). The runner now parses `[VK] qwen36 chain` waits/forwards and keeps the profile lines.
+Then pick ONE implementation from the profile (dense shapes/shaders, submissions/fusion,
+or the CPU expert kernel); profile prefill separately for the 16.5 s long TTFT.
+
+### November 5: controlled results received, memory pressure was next
 
 Pulled `64f0e5e` and reviewed `benchmark-results/linux-session-20261105-200755`.
 Six compute threads improved the sweep's short median from 15.74 to 17.15 tok/s
@@ -16,11 +39,8 @@ The `long/` directory accidentally contains short `bench` runs. Actual long
 workloads exist under `sweep/`, `sustained-long/` and `rebuilt-long/`.
 
 The runner now has `ram80` / `threads6-ram80`, memory-warning counts and optional
-`--stop-on-pressure`, plus explicit prompt path/output-limit metadata. No
-unmeasured combination is installed as the default. Follow the runbook's
-[focused next comparison](docs/CACHYOS-PERFORMANCE.md#next-commands-for-this-already-tested-laptop).
-That section now contains seven numbered steps from pull through results push,
-explicit reference settings, and the decision plan after the comparison.
+`--stop-on-pressure`, plus explicit prompt path/output-limit metadata. That
+comparison has since been run (see November 7 above).
 
 The target machine is now the same laptop booted into CachyOS (XFCE4). Same hardware (Ryzen 7 5800HS,
 RTX 3050 Laptop 4 GB, 16 GB RAM, NVMe). Model is at `~/colibri-models/qwen36-35b`, so always set `SNAP`.
@@ -42,14 +62,12 @@ Commit `45d8fae` contains successful post-xpack CachyOS runs:
 Long-run Speed includes prefill, not decode-only throughput. Short/long answers
 were truncated by the 128/48-token limits; use completed coding tasks for quality.
 
-### DO THIS NEXT: controlled offline-prepared experiments
+### November 4 (done): controlled offline-prepared experiments
 
-Read [the exact CachyOS runbook](docs/CACHYOS-PERFORMANCE.md). The launcher now
-exports SNAP, propagates failures, isolates quality mode, leaves physical-core
-sizing to the engine and delegates experiments to `c/tools/q36_bench.py`.
-Its [complete start-to-finish sequence](docs/CACHYOS-PERFORMANCE.md#complete-start-to-finish-sequence)
-covers pulling on CachyOS XFCE4, preserving the binary, all experiments, log review
-and selectively pushing results in one numbered workflow.
+Historical: these tooling steps were completed on November 5. For the current steps,
+read [docs/CACHYOS-PERFORMANCE.md](docs/CACHYOS-PERFORMANCE.md). The launcher
+exports SNAP, propagates failures, isolates quality mode and delegates experiments
+to `c/tools/q36_bench.py` (sweeps) and `c/tools/q36_agent_bench.py` (coding agent).
 
 ```bash
 cd ~/personal_proj

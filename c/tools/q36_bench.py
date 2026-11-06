@@ -20,9 +20,15 @@ from datetime import datetime, timezone
 ROOT = Path(__file__).resolve().parents[2]
 RESULTS = ROOT / "benchmark-results"
 PROFILES = {
+    # baseline = the launcher's defaults: 6 compute threads, Q36_RAM_FRAC=0.80
     "baseline": {},
+    # the defaults before the memory comparison: engine thread count, 0.92 RAM fraction
+    "previous": {"OMP_NUM_THREADS": None, "Q36_RAM_FRAC": "0.92"},
+    "auto-threads": {"OMP_NUM_THREADS": None},
     "threads6": {"OMP_NUM_THREADS": "6"},
+    "threads7": {"OMP_NUM_THREADS": "7"},
     "io4": {"Q36_IO_THREADS": "4"},
+    "io6": {"Q36_IO_THREADS": "6"},
     "passive": {
         "OMP_WAIT_POLICY": "passive", "GOMP_SPINCOUNT": "0", "KMP_BLOCKTIME": "0",
     },
@@ -33,10 +39,15 @@ PROFILES = {
     "bind": {"OMP_PLACES": "cores", "OMP_PROC_BIND": "close"},
     "ram88": {"Q36_RAM_FRAC": "0.88"},
     "ram80": {"Q36_RAM_FRAC": "0.80"},
+    "ram75": {"Q36_RAM_FRAC": "0.75"},
     "threads6-ram80": {"OMP_NUM_THREADS": "6", "Q36_RAM_FRAC": "0.80"},
 }
 METRICS = {
     "prompt_tokens": r"\[enc\] prompt tokens:\s*(\d+)",
+    "vk_forwards": r"\[VK\] qwen36 chain:\s*(\d+)\s*forwards",
+    "vk_wait_ms": r"\[VK\] qwen36 chain:.*?([\d.]+)\s*ms waiting for the device",
+    "vk_host_experts_ms": r"\[VK\] qwen36 chain:.*?([\d.]+)\s*ms of routed experts on the host",
+    "vk_profile_device_ms": r"\[VK\] chain profile:\s*([\d.]+)\s*ms of device time",
     "ttft_s": r"TTFT:\s*([\d.]+)\s*s",
     "reported_speed_tps": r"Speed:\s*([\d.]+)\s*tok/s",
     "step_ms": r"step\(\) total:\s*([\d.]+)\s*ms/token",
@@ -256,6 +267,7 @@ def run_once(env, prompt, output, label, timeout, monitor_gpu=True):
     text = log_path.read_text(encoding="utf-8", errors="replace")
     last = sample_system()
     metrics = parse_metrics(text)
+    record["vk_profile"] = [line for line in text.splitlines() if line.startswith("[VK] chain profile")]
     complete = "ttft_s" in metrics and "reported_speed_tps" in metrics
     record.update(exit_code=code, timed_out=timed_out,
                   wall_s=time.monotonic() - start, metrics=metrics,
@@ -320,12 +332,23 @@ def positive_int(value):
     return number
 
 
+def profile_env(env, profile):
+    """The environment for one profile; a None value removes the variable."""
+    result = dict(env)
+    for key, value in PROFILES[profile].items():
+        if value is None:
+            result.pop(key, None)
+        else:
+            result[key] = value
+    return result
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("doctor", "bench", "long", "sweep"))
     parser.add_argument("--repeats", type=positive_int, default=3)
     parser.add_argument("--profiles", nargs="+", choices=tuple(PROFILES),
-                        default=["baseline", "threads6", "io4", "passive", "passive-io4"])
+                        default=["baseline", "previous"])
     parser.add_argument("--workloads", nargs="+", choices=("bench", "long"),
                         default=["bench", "long"])
     parser.add_argument("--tokens", type=positive_int,
@@ -369,7 +392,7 @@ def main(argv=None):
         order = profiles if repeat % 2 else list(reversed(profiles))
         for workload in workloads:
             for profile in order:
-                run_env = {**env, **PROFILES[profile]}
+                run_env = profile_env(env, profile)
                 run_env["N_NEW"] = str(args.tokens or positive_int(
                     env.get("N_NEW", "48" if workload == "long" else "128")))
                 label = f"{workload}-{profile}-r{repeat}"

@@ -8,8 +8,13 @@
 #   ./turbo-qwen36.sh long         5,338-token reference prompt
 #   ./turbo-qwen36.sh doctor       read-only system diagnostics
 #   ./turbo-qwen36.sh sweep        repeated baseline/thread/wait-policy experiments
+#   ./turbo-qwen36.sh agent        multi-turn coding-agent test against a persistent server
 #
-# Override before calling: SNAP (model dir), GPU=0 (CPU only), COLI_VK_TIER=0 (CPU experts for prompts)
+# Defaults are the configuration measured best on the 5800HS / RTX 3050 / 16 GB laptop
+# (benchmark-results/linux-memory-20261107-000107): 6 compute threads, 80% of free RAM
+# for the expert cache. Override before calling: SNAP (model dir), GPU=0 (CPU only),
+# COLI_VK_TIER=0 (CPU experts for prompts), OMP_NUM_THREADS=auto (engine's own count),
+# Q36_RAM_FRAC=0.92 (the previous, larger cache).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 src=$(cd "$here/.." && pwd)
@@ -25,11 +30,19 @@ if [ "${LOSSY:-0}" != 0 ]; then
     exit 2
 fi
 unset Q36_SKIP_MISS Q36_SKIP_KEEP Q36_SKIP_RENORM COLI_DENSE_BITS COLI_DENSE_INT4
-# The engine already counts physical cores with affinity awareness.
-# Leave OMP_NUM_THREADS unset unless the user explicitly selects a value.
+# Six compute threads beat the engine's physical-core count in both laptop sweeps
+# (short step 65.5 -> 59.7 ms; with the smaller cache 64.5 -> 62.6 ms on the long run),
+# leaving two cores for the expert loaders and the desktop. auto = the engine decides.
+if [ "${OMP_NUM_THREADS:-}" = auto ]; then
+    unset OMP_NUM_THREADS
+else
+    export OMP_NUM_THREADS=${OMP_NUM_THREADS:-6}
+fi
 export Q36_IO_THREADS=${Q36_IO_THREADS:-8}
 export Q36_EVICT=slru Q36_SLRU_PROT=0.8 Q36_HEAT=${Q36_HEAT:-1}
-export Q36_RAM_FRAC=${Q36_RAM_FRAC:-0.92}
+# 0.92 left 81-129 MiB free and swapped hundreds of thousands of pages on long prompts;
+# 0.80 kept about 1.4 GiB free with a lower long TTFT. RAM_GB, if set, overrides this.
+export Q36_RAM_FRAC=${Q36_RAM_FRAC:-0.80}
 export Q36_LOOKAHEAD=${Q36_LOOKAHEAD:-1}
 export Q36_XPACK=${Q36_XPACK:-1}
 export Q36_MAXT=${Q36_MAXT:-16384}
@@ -47,6 +60,11 @@ case "${1:-serve}" in
     bench|long|doctor|sweep)
         command -v python3 >/dev/null || { echo "ERROR: python3 is required" >&2; exit 1; }
         exec python3 "$src/c/tools/q36_bench.py" "$@"
+        ;;
+    agent)
+        command -v python3 >/dev/null || { echo "ERROR: python3 is required" >&2; exit 1; }
+        shift
+        exec python3 "$src/c/tools/q36_agent_bench.py" "$@"
         ;;
 esac
 [ -d "$SNAP" ] || { echo "ERROR: model directory not found: $SNAP. Export SNAP first." >&2; exit 1; }
