@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[2]
 RESULTS = ROOT / "benchmark-results"
+DEFAULT_CONF = Path(os.environ.get("Q36_CONF") or Path.home() / ".config" / "colibri" / "q36.env")
 PROFILES = {
     # baseline = the launcher's defaults: 6 compute threads, Q36_RAM_FRAC=0.80
     "baseline": {},
@@ -41,6 +42,16 @@ PROFILES = {
     "ram80": {"Q36_RAM_FRAC": "0.80"},
     "ram75": {"Q36_RAM_FRAC": "0.75"},
     "threads6-ram80": {"OMP_NUM_THREADS": "6", "Q36_RAM_FRAC": "0.80"},
+    # decode levers that need no setup (all lossless: same model, same routing)
+    "la2": {"Q36_LOOKAHEAD": "2"},                              # experts read 2 layers ahead
+    "la2x8": {"Q36_LOOKAHEAD": "2", "Q36_LOOKAHEAD_EXTRA": "8"},  # ...and 8 extra candidates
+    "tierdec": {"Q36_VK_TIER_MIN_ROWS": "1"},                   # GPU-resident experts help decode
+    "gemv2": {"COLI_VK_CHAIN_GEMV2": "1"},                      # other int8 decode GEMV on NVIDIA
+    "lookup7": {"COLI_LOOKUP_DRAFTS": "7"},                     # longer prompt-lookup drafts
+    # the MTP draft head (needs `turbo-qwen36.sh mtp-setup` and SNAP=<base>-mtp)
+    "mtp1": {"Q36_MTP": "1"},
+    "mtp2": {"Q36_MTP": "1", "Q36_MTP_DRAFTS": "2"},
+    "mtpauto": {"Q36_MTP": "1", "Q36_MTP_DRAFTS": "auto"},
 }
 METRICS = {
     "prompt_tokens": r"\[enc\] prompt tokens:\s*(\d+)",
@@ -55,16 +66,29 @@ METRICS = {
     "compute_ms": r"expert kernel: fetch\s*[\d.]+\s*\|\s*compute\s*([\d.]+)",
     "cache_hit_pct": r"Expert cache hit rate:\s*([\d.]+)%",
     "peak_rss_gb": r"PEAK RSS:\s*([\d.]+)\s*GB",
-    "tokens_per_forward": r"\[qwen36 lookup\] run:\s*([\d.]+)\s*tokens/forward",
+    "tokens_per_forward": r"\[qwen36 (?:lookup|mtp)\] run:\s*([\d.]+)\s*tokens/forward",
+    "mtp_acceptance_pct": r"\[qwen36 mtp\] run:.*?acceptance\s*([\d.]+)%",
+    # derived below: generated tokens after the first, over generation time after TTFT
+    "decode_tps": None,
 }
+SPEED_DETAIL = re.compile(r"Speed:\s*[\d.]+\s*tok/s\s*\(([\d.]+)s for (\d+) tokens\)")
 
 
 def parse_metrics(text):
-    return {
+    values = {
         key: float(matches[-1])
         for key, pattern in METRICS.items()
-        if (matches := re.findall(pattern, text))
+        if pattern and (matches := re.findall(pattern, text))
     }
+    # The engine's Speed covers prompt processing AND generation; decode speed excludes
+    # the time to the first token.
+    detail = SPEED_DETAIL.findall(text)
+    if detail and "ttft_s" in values:
+        total, tokens = float(detail[-1][0]), int(detail[-1][1])
+        generating = total - values["ttft_s"]
+        if tokens > 1 and generating > 0:
+            values["decode_tps"] = round((tokens - 1) / generating, 2)
+    return values
 
 
 def sha256(path):
@@ -212,6 +236,9 @@ def validate_run(env, prompt):
         if not packed.is_file() or packed.stat().st_size == 0:
             raise ValueError("experts.q36x is missing/empty; run the launcher xpack first, "
                              "or explicitly set Q36_XPACK=0 for an unpacked comparison")
+    if env.get("Q36_MTP") == "1" and not (Path(env["SNAP"]) / "model-mtp.safetensors").is_file():
+        raise ValueError(f"Q36_MTP=1 but {env['SNAP']} has no model-mtp.safetensors: run "
+                         "`turbo-qwen36.sh mtp-setup`, then export SNAP=<model>-mtp")
     return engine
 
 
@@ -333,17 +360,147 @@ def positive_int(value):
 
 
 def profile_env(env, profile):
-    """The environment for one profile; a None value removes the variable."""
+    """The environment for one profile; a None value removes the variable. A profile that
+    turns the MTP head on runs from <SNAP>-mtp when SNAP itself has no head file."""
     result = dict(env)
     for key, value in PROFILES[profile].items():
         if value is None:
             result.pop(key, None)
         else:
             result[key] = value
-    return result
+    return mtp_snap(result)
+
+
+def mtp_snap(env):
+    if env.get("Q36_MTP") == "1" and env.get("SNAP"):
+        snap = Path(env["SNAP"].rstrip("/\\"))
+        head = "model-mtp.safetensors"
+        alt = snap.with_name(snap.name + "-mtp")
+        if not (snap / head).is_file() and (alt / head).is_file():
+            env = {**env, "SNAP": str(alt)}
+    return env
+
+
+def profile_settings(profile):
+    """KEY=VALUE pairs that reproduce a profile through the launcher (None -> its 'auto')."""
+    settings = {}
+    for key, value in PROFILES[profile].items():
+        if value is None:
+            if key != "OMP_NUM_THREADS":
+                raise ValueError(f"profile {profile} unsets {key}, which the launcher cannot express")
+            value = "auto"
+        settings[key] = value
+    return settings
+
+
+def _eligible(row, min_available_kib):
+    available = row.get("min_available_kib_min")
+    return (row.get("valid_runs", 0) >= 2 and not row.get("failed_runs")
+            and (available is None or available >= min_available_kib))
+
+
+def pick_best(rows, metric="decode_tps", min_gain=0.03, min_available_kib=512 * 1024,
+              primary="bench", long_slack=0.05):
+    """The profile to keep, by fixed rules (printed so the decision can be checked):
+    every one of its rows succeeded with >= 2 measured runs and >= 512 MiB of RAM free;
+    its `primary` workload's median `metric` beats baseline by >= min_gain; on the long
+    workload, if measured, its median metric and TTFT are no more than long_slack worse.
+    Returns (profile, reasons) -- 'baseline' when nothing qualifies."""
+    by_profile = {}
+    for row in rows:
+        by_profile.setdefault(row["profile"], {})[row["workload"]] = row
+    if "baseline" not in by_profile:
+        raise ValueError("the sweep has no baseline profile to compare against")
+    base = by_profile["baseline"]
+    if primary not in base:
+        primary = next(iter(base))
+    base_score = base[primary].get(f"{metric}_median")
+    if base_score is None:
+        raise ValueError(f"baseline has no {metric} on {primary}")
+    reasons, best, best_score = {}, "baseline", base_score
+    for profile, workloads in by_profile.items():
+        if profile == "baseline":
+            continue
+        if not all(_eligible(row, min_available_kib) for row in workloads.values()):
+            reasons[profile] = "rejected: failed runs, <2 measured runs or <512 MiB RAM free"
+            continue
+        score = workloads.get(primary, {}).get(f"{metric}_median")
+        if score is None:
+            reasons[profile] = f"rejected: no {metric} on {primary}"
+            continue
+        gain = score / base_score - 1
+        if gain < min_gain:
+            reasons[profile] = f"rejected: {primary} {metric} {score:.2f} vs {base_score:.2f} ({gain:+.1%})"
+            continue
+        if "long" in workloads and "long" in base and primary != "long":
+            lrow, lbase = workloads["long"], base["long"]
+            lm, lb = lrow.get(f"{metric}_median"), lbase.get(f"{metric}_median")
+            lt, lbt = lrow.get("ttft_s_median"), lbase.get("ttft_s_median")
+            if lm is not None and lb and lm < lb * (1 - long_slack):
+                reasons[profile] = f"rejected: long {metric} {lm:.2f} vs {lb:.2f}"
+                continue
+            if lt is not None and lbt and lt > lbt * (1 + long_slack):
+                reasons[profile] = f"rejected: long TTFT {lt:.2f} s vs {lbt:.2f} s"
+                continue
+        reasons[profile] = f"qualifies: {primary} {metric} {score:.2f} vs {base_score:.2f} ({gain:+.1%})"
+        if score > best_score:
+            best, best_score = profile, score
+    return best, reasons
+
+
+def read_conf(path):
+    values = {}
+    if path.is_file():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip()
+    return values
+
+
+def save_conf(path, settings):
+    values = read_conf(path)
+    values.update(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = ["# Settings measured best on this machine (written by q36_bench.py best --save).",
+             "# The launcher applies each one unless the same variable is set in the shell.",
+             *(f"{key}={value}" for key, value in sorted(values.items()))]
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return values
+
+
+def best_main(argv):
+    parser = argparse.ArgumentParser(prog="q36_bench.py best",
+                                     description="Pick the measured winner of a sweep.")
+    parser.add_argument("summary", type=Path, help="a sweep's summary.json")
+    parser.add_argument("--metric", default="decode_tps")
+    parser.add_argument("--min-gain", type=float, default=0.03)
+    parser.add_argument("--save", type=Path, nargs="?", const=DEFAULT_CONF,
+                        help=f"merge the winner into this settings file (default {DEFAULT_CONF})")
+    args = parser.parse_args(argv)
+    rows = json.loads(args.summary.read_text(encoding="utf-8"))
+    best, reasons = pick_best(rows, args.metric, args.min_gain)
+    for profile, reason in sorted(reasons.items()):
+        print(f"  {profile:<16} {reason}", file=sys.stderr)
+    if best == "baseline":
+        print("Result: keep the current settings (no profile qualified).", file=sys.stderr)
+        return 0
+    settings = profile_settings(best)
+    print(f"Result: {best} -> {' '.join(f'{k}={v}' for k, v in settings.items())}", file=sys.stderr)
+    for key, value in settings.items():
+        print(f"export {key}={value}")
+    if args.save:
+        saved = save_conf(args.save, settings)
+        print(f"Saved to {args.save}: {' '.join(f'{k}={v}' for k, v in sorted(saved.items()))}",
+              file=sys.stderr)
+    return 0
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv[:1] == ["best"]:
+        return best_main(argv[1:])
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("doctor", "bench", "long", "sweep"))
     parser.add_argument("--repeats", type=positive_int, default=3)
@@ -384,7 +541,8 @@ def main(argv=None):
     prompts = {w: Path(env["PROMPT"]) if env.get("PROMPT") else
                RESULTS / ("prompt-long.txt" if w == "long" else "prompt.txt") for w in workloads}
     for prompt in prompts.values():
-        validate_run(env, prompt)
+        for profile in profiles:
+            validate_run(profile_env(env, profile), prompt)
     records = []
     # Warm each profile/workload once, then interleave measured configurations.
     rounds = ([0] if not args.no_warmup else []) + list(range(1, args.repeats + 1))
@@ -419,11 +577,12 @@ def main(argv=None):
     print("Summary: " + str(output / "summary.csv"))
     for row in summarize(records):
         print(f"{row['workload']} / {row['profile']}: {row['valid_runs']} measured runs; "
-              f"median TTFT={row.get('ttft_s_median', 'unavailable')} s; "
-              f"step={row.get('step_ms_median', 'unavailable')} ms; "
-              f"reported Speed={row.get('reported_speed_tps_median', 'unavailable')} tok/s")
-    print("Reported Speed includes prefill; step_ms is not accepted-token throughput. "
-          "History evolves; no caches were reset. No profile is automatically applied.")
+              f"decode={row.get('decode_tps_median', 'unavailable')} tok/s; "
+              f"TTFT={row.get('ttft_s_median', 'unavailable')} s; "
+              f"step={row.get('step_ms_median', 'unavailable')} ms")
+    print("decode = generated tokens after the first / time after the first token. "
+          "Reported Speed also includes the prompt. No profile is applied automatically: "
+          "`q36_bench.py best <summary.json> --save` keeps a measured winner.")
     return 0
 
 

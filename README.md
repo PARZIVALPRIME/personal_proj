@@ -76,6 +76,8 @@ benchmark-results/turbo-qwen36.sh bench      # warm-up + 3 measured short runs
 benchmark-results/turbo-qwen36.sh long       # 5,338-token reference prompt
 benchmark-results/turbo-qwen36.sh doctor     # read-only hardware/runtime diagnostics
 benchmark-results/turbo-qwen36.sh sweep      # controlled configuration comparisons
+benchmark-results/turbo-qwen36.sh best FILE  # pick a sweep's measured winner (--save keeps it)
+benchmark-results/turbo-qwen36.sh mtp-setup  # one time: add Qwen's MTP draft head (~6 GB download)
 ```
 
 Another model folder: `SNAP=/path/to/model benchmark-results/turbo-qwen36.sh`.
@@ -90,7 +92,9 @@ for repeats, generation limits, optional profiles, telemetry and rollback.
 and `Q36_RAM_FRAC=0.92` restore the previous behaviour), `Q36_IO_THREADS=8`, `Q36_EVICT=slru`,
 `Q36_HEAT=1`, `Q36_LOOKAHEAD=1`,
 `Q36_XPACK=1`, `Q36_MAXT=16384`, `COLI_LOOKUP=1`, Vulkan trunk, GPU expert tier for prompts only
-(`Q36_VK_TIER_MIN_ROWS=64`), `COLI_VK_TIER_RESERVE_GB=0.5`.
+(`Q36_VK_TIER_MIN_ROWS=64`), `COLI_VK_TIER_RESERVE_GB=0.5`. Settings measured best on this
+machine and saved by `best --save` (`~/.config/colibri/q36.env`) apply on top, unless the
+same variable is set in the shell; `Q36_CONF=none` ignores them.
 
 ### If something regresses
 

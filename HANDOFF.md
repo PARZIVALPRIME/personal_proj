@@ -2,6 +2,35 @@
 
 ## CURRENT STATE (read this first): moved from Windows to CachyOS Linux
 
+### November 7 (later): round 4 = optimize decode toward 30 tok/s, then coding tests
+
+Decode-only speed (new `decode_tps` metric: tokens after the first / time after TTFT),
+recomputed from the November 7 logs: **20.6 tok/s short, 16.8 after the 5.3k prompt**
+(6 threads, 0.80 cache). 30 tok/s needs 1.45x; the forward is a serial GPU-dense ->
+CPU-experts chain x 40 layers, so the only lossless lever with real headroom left is
+more tokens per forward.
+
+- **MTP draft head:** the engine supports Qwen3.6's MTP head (`Q36_MTP=1`, verified
+  drafts, identical output) but the HF container `Kreuzzelg/qwen36-35b-a3b-colibri-i4-gs64`
+  has no `model-mtp.safetensors`. `turbo-qwen36.sh mtp-setup` (`c/tools/q36_mtp_setup.py`)
+  downloads only the 2 official shards holding `mtp.*` (model-00025/26-of-00026, ~6 GB),
+  runs `convert_qwen36.py --mtp-only` into `<model>-mtp` (head + links, base untouched),
+  then deletes the download. Config/meta geometry was checked to match. Elsewhere one
+  draft gave +7% (CPU) to +12-14% (GPU chain); here unmeasured, the head's VRAM/RAM fit
+  decides whether it runs on the device or the CPU.
+- **Free levers in the sweep:** `la2`, `la2x8` (lookahead depth/width), `tierdec`
+  (GPU tier for decode rows; was slower on Windows), `gemv2` (other int8 GEMV on NVIDIA),
+  `lookup7`, `mtp1`/`mtp2`/`mtpauto`.
+- **Measured winners persist:** `turbo-qwen36.sh best <summary.json> --save` applies fixed
+  rules (>=3% decode gain, no failures, >=512 MiB free, long prompt <=5% worse) and merges
+  the winner into `~/.config/colibri/q36.env`, which the launcher applies unless the shell
+  sets the variable (`Q36_CONF=none` ignores it). MTP profiles/settings switch SNAP to
+  `<model>-mtp` automatically.
+
+Expected: ~22-25 tok/s decode. If short of 30, next work is the ~33 ms/token outside the
+expert timers (GPU chain, hand-offs): the round also captures `COLI_VK_CHAIN_PROF=2`.
+Steps 1-14 in [docs/CACHYOS-PERFORMANCE.md](docs/CACHYOS-PERFORMANCE.md).
+
 ### November 7: memory comparison done, new defaults, round 3 is next
 
 Pulled `35bd4da` (`benchmark-results/linux-memory-20261107-000107`, 256 tokens out,

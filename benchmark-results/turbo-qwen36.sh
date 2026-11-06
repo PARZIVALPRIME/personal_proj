@@ -8,17 +8,53 @@
 #   ./turbo-qwen36.sh long         5,338-token reference prompt
 #   ./turbo-qwen36.sh doctor       read-only system diagnostics
 #   ./turbo-qwen36.sh sweep        repeated baseline/thread/wait-policy experiments
+#   ./turbo-qwen36.sh best FILE    pick a sweep's measured winner (--save keeps it)
 #   ./turbo-qwen36.sh agent        multi-turn coding-agent test against a persistent server
+#   ./turbo-qwen36.sh mtp-setup    ONE TIME: add Qwen's MTP draft head as <model>-mtp (~6 GB download)
 #
 # Defaults are the configuration measured best on the 5800HS / RTX 3050 / 16 GB laptop
 # (benchmark-results/linux-memory-20261107-000107): 6 compute threads, 80% of free RAM
-# for the expert cache. Override before calling: SNAP (model dir), GPU=0 (CPU only),
+# for the expert cache. Winners saved by `best --save` live in ~/.config/colibri/q36.env
+# (Q36_CONF names another file, Q36_CONF=none ignores it) and apply unless the same
+# variable is set in the shell. Override before calling: SNAP (model dir), GPU=0 (CPU only),
 # COLI_VK_TIER=0 (CPU experts for prompts), OMP_NUM_THREADS=auto (engine's own count),
-# Q36_RAM_FRAC=0.92 (the previous, larger cache).
+# Q36_RAM_FRAC=0.92 (the previous, larger cache), Q36_MTP=1 (MTP draft head; SNAP then
+# defaults to <model>-mtp).
 set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 src=$(cd "$here/.." && pwd)
 
+base_snap=${SNAP:-$HOME/colibri-models/qwen36-35b}
+case "${1:-serve}" in
+    mtp-setup)
+        command -v python3 >/dev/null || { echo "ERROR: python3 is required" >&2; exit 1; }
+        shift
+        exec python3 "$src/c/tools/q36_mtp_setup.py" --base "$base_snap" "$@"
+        ;;
+    best)
+        command -v python3 >/dev/null || { echo "ERROR: python3 is required" >&2; exit 1; }
+        exec python3 "$src/c/tools/q36_bench.py" "$@"
+        ;;
+esac
+
+conf=${Q36_CONF:-$HOME/.config/colibri/q36.env}
+if [ "$conf" != none ] && [ -f "$conf" ]; then
+    while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in ''|\#*) continue ;; esac
+        key=${line%%=*}
+        value=${line#*=}
+        case "$key" in ''|*[!A-Za-z0-9_]*) continue ;; esac
+        [ -n "${!key+x}" ] || export "$key=$value"
+    done < "$conf"
+fi
+
+if [ "${Q36_MTP:-0}" = 1 ]; then
+    snap=${SNAP:-$HOME/colibri-models/qwen36-35b}
+    snap=${snap%/}
+    if [ ! -f "$snap/model-mtp.safetensors" ] && [ -f "$snap-mtp/model-mtp.safetensors" ]; then
+        SNAP=$snap-mtp
+    fi
+fi
 export SNAP=${SNAP:-$HOME/colibri-models/qwen36-35b}
 GPU=${GPU:-vk}
 export COLI_ENGINE=${COLI_ENGINE:-$src/c/qwen36}
@@ -69,6 +105,11 @@ case "${1:-serve}" in
 esac
 [ -d "$SNAP" ] || { echo "ERROR: model directory not found: $SNAP. Export SNAP first." >&2; exit 1; }
 [ -x "$COLI_ENGINE" ] || { echo "ERROR: $COLI_ENGINE not executable. Run: make -C \"$src/c\" qwen36 VK=1" >&2; exit 1; }
+if [ "${Q36_MTP:-0}" = 1 ] && [ ! -f "$SNAP/model-mtp.safetensors" ]; then
+    echo "ERROR: Q36_MTP=1 but neither $SNAP nor ${SNAP%/}-mtp has model-mtp.safetensors." >&2
+    echo "       Run once: bash $0 mtp-setup" >&2
+    exit 1
+fi
 
 case "${1:-serve}" in
     chat)  shift; exec "$src/c/coli" chat --model "$SNAP" --cap 0 "$@" ;;
