@@ -1,0 +1,73 @@
+{
+  "label": "long-tierdec-r1",
+  "command": [
+    "/home/parzivalprime/personal_proj/c/qwen36",
+    "0",
+    "4",
+    "/home/parzivalprime/personal_proj/benchmark-results/prompt-long.txt"
+  ],
+  "environment": {
+    "COLI_CUDA": "0",
+    "COLI_ENGINE": "/home/parzivalprime/personal_proj/c/qwen36",
+    "COLI_LOOKUP": "1",
+    "COLI_TIMERS": "1",
+    "COLI_VK_SHADERS": "/home/parzivalprime/personal_proj/c/shaders",
+    "COLI_VK_TIER": "1",
+    "COLI_VK_TIER_EXCLUSIVE": "0",
+    "COLI_VK_TIER_HOST": "0",
+    "COLI_VK_TIER_RESERVE_GB": "0.5",
+    "COLI_VULKAN": "1",
+    "N_NEW": "256",
+    "OMP_NUM_THREADS": "6",
+    "PILOT": "0",
+    "Q36_EVICT": "slru",
+    "Q36_HEAT": "1",
+    "Q36_HEAT_WAIT": "1",
+    "Q36_IO_THREADS": "8",
+    "Q36_LOOKAHEAD": "1",
+    "Q36_MAXT": "16384",
+    "Q36_RAM_FRAC": "0.80",
+    "Q36_SLRU_PROT": "0.8",
+    "Q36_VK_TIER_MIN_ROWS": "1",
+    "Q36_XPACK": "1",
+    "SNAP": "/home/parzivalprime/colibri-models/qwen36-35b"
+  },
+  "prompt_path": "/home/parzivalprime/personal_proj/benchmark-results/prompt-long.txt",
+  "requested_output_tokens": 256,
+  "engine_sha256": "ebef1cddd52f94930dd2b3d37eeea209404934b770159f6cf5ca5e1b5a1d5dcb",
+  "prompt_sha256": "cd410791da90635a1c4d37c0973c630f08635f2297439df91cc4f237ff99bebc",
+  "started_utc": "2026-11-06T20:57:03.709891+00:00",
+  "vk_profile": [],
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_s": 46.101501436000035,
+  "metrics": {
+    "prompt_tokens": 5338.0,
+    "vk_forwards": 251.0,
+    "vk_wait_ms": 13382.9,
+    "vk_host_experts_ms": 17079.6,
+    "ttft_s": 16.394,
+    "reported_speed_tps": 7.81,
+    "step_ms": 68.0,
+    "cache_hit_pct": 94.4,
+    "peak_rss_gb": 13.19,
+    "tokens_per_forward": 1.02,
+    "decode_tps": 15.54
+  },
+  "status": "ok",
+  "gpu_monitor": {
+    "stopped_by_runner": true
+  },
+  "system_memory": {
+    "min_available_kib": 1595504,
+    "pswpin_delta": 30,
+    "pswpout_delta": 509,
+    "pgmajfault_delta": 117
+  },
+  "warnings": [
+    "System swap activity occurred; counters are system-wide, not engine-only."
+  ],
+  "profile": "tierdec",
+  "workload": "long",
+  "warmup": false
+}

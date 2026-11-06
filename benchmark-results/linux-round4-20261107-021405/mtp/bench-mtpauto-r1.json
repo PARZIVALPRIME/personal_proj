@@ -1,0 +1,78 @@
+{
+  "label": "bench-mtpauto-r1",
+  "command": [
+    "/home/parzivalprime/personal_proj/c/qwen36",
+    "0",
+    "4",
+    "/home/parzivalprime/personal_proj/benchmark-results/prompt.txt"
+  ],
+  "environment": {
+    "COLI_CUDA": "0",
+    "COLI_ENGINE": "/home/parzivalprime/personal_proj/c/qwen36",
+    "COLI_LOOKUP": "1",
+    "COLI_TIMERS": "1",
+    "COLI_VK_SHADERS": "/home/parzivalprime/personal_proj/c/shaders",
+    "COLI_VK_TIER": "1",
+    "COLI_VK_TIER_EXCLUSIVE": "0",
+    "COLI_VK_TIER_HOST": "0",
+    "COLI_VK_TIER_RESERVE_GB": "0.5",
+    "COLI_VULKAN": "1",
+    "N_NEW": "256",
+    "OMP_NUM_THREADS": "6",
+    "PILOT": "0",
+    "Q36_EVICT": "slru",
+    "Q36_HEAT": "1",
+    "Q36_HEAT_WAIT": "1",
+    "Q36_IO_THREADS": "8",
+    "Q36_LOOKAHEAD": "1",
+    "Q36_MAXT": "16384",
+    "Q36_MTP": "1",
+    "Q36_MTP_DRAFTS": "auto",
+    "Q36_RAM_FRAC": "0.80",
+    "Q36_SLRU_PROT": "0.8",
+    "Q36_VK_TIER_MIN_ROWS": "64",
+    "Q36_XPACK": "1",
+    "SNAP": "/home/parzivalprime/colibri-models/qwen36-35b-mtp"
+  },
+  "prompt_path": "/home/parzivalprime/personal_proj/benchmark-results/prompt.txt",
+  "requested_output_tokens": 256,
+  "engine_sha256": "ebef1cddd52f94930dd2b3d37eeea209404934b770159f6cf5ca5e1b5a1d5dcb",
+  "prompt_sha256": "8df7d5c42b8bcd2f84c0b01989e0e42c91ff835cf0b8e825d39b07c89c750755",
+  "started_utc": "2026-11-06T21:52:20.973154+00:00",
+  "vk_profile": [],
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_s": 45.19129188400075,
+  "metrics": {
+    "prompt_tokens": 32.0,
+    "vk_forwards": 97.0,
+    "vk_wait_ms": 11963.3,
+    "vk_host_experts_ms": 11398.3,
+    "ttft_s": 3.232,
+    "reported_speed_tps": 10.06,
+    "step_ms": 7388.5,
+    "fetch_ms": 17.51,
+    "compute_ms": 21.19,
+    "cache_hit_pct": 94.2,
+    "peak_rss_gb": 12.09,
+    "tokens_per_forward": 2.66,
+    "mtp_acceptance_pct": 82.4,
+    "decode_tps": 11.5
+  },
+  "status": "ok",
+  "gpu_monitor": {
+    "stopped_by_runner": true
+  },
+  "system_memory": {
+    "min_available_kib": 2023468,
+    "pswpin_delta": 80,
+    "pswpout_delta": 3576,
+    "pgmajfault_delta": 224
+  },
+  "warnings": [
+    "System swap activity occurred; counters are system-wide, not engine-only."
+  ],
+  "profile": "mtpauto",
+  "workload": "bench",
+  "warmup": false
+}

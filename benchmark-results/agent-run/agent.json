@@ -1,0 +1,84 @@
+{
+  "started_utc": "2026-11-06T22:23:00.155325+00:00",
+  "think": false,
+  "max_tokens": 512,
+  "context": "/home/parzivalprime/personal_proj/benchmark-results/prompt-long.txt",
+  "server_command": [
+    "bash",
+    "/home/parzivalprime/personal_proj/benchmark-results/turbo-qwen36.sh",
+    "serve",
+    "--port",
+    "8011"
+  ],
+  "startup_s": 9.18186278199937,
+  "model": "qwen3.6-colibri",
+  "turns": [
+    {
+      "content": "*   **kv16.h**: Implements a float16 KV cache with precise rounding and clamping, providing optimized scalar and AVX2/F16C vectorized functions to pack, unpack, and compute dot products using half-precision values.\n*   **pin_pool.h**: Manages a fixed-size pool of pinned inference states (checkpoints) to avoid reprocessing common instruction prefixes, using an LRU strategy to store token IDs, logits, and opaque engine states.",
+      "reasoning": "",
+      "ttft_s": 21.10271652099982,
+      "first_answer_s": 21.10271652099982,
+      "total_s": 28.994131451001522,
+      "prompt_tokens": 5387,
+      "completion_tokens": 98,
+      "generation_tps": 12.291838771678817,
+      "finish_reason": "stop",
+      "turn": 1
+    },
+    {
+      "content": "```c\nint kv_rows_needed(int len, int cap) {\n    if (len <= 0) return 0;\n    if (cap <= 0) return len;\n    return len < cap ? len : cap;\n}\n```",
+      "reasoning": "",
+      "ttft_s": 1.2594334299992624,
+      "first_answer_s": 1.2594334299992624,
+      "total_s": 5.381237605999559,
+      "prompt_tokens": 5540,
+      "completion_tokens": 54,
+      "generation_tps": 12.858446868630711,
+      "finish_reason": "stop",
+      "turn": 2
+    },
+    {
+      "content": "The riskiest line is `memcpy(k->ids, ids, (size_t)n * sizeof(int));` in `coli_pin_store`, which can write beyond the allocated buffer if `n` exceeds `k->cap` due to a race or logic error before the `realloc` check.\n\nCorrected version:\n```c\nif (n > k->cap) {\n    int *grown = (int *)realloc(k->ids, (size_t)n * sizeof(int));\n    if (!grown) { k->len = 0; return NULL; }\n    k->ids = grown; k->cap = n;\n}\nmemcpy(k->ids, ids, (size_t)n * sizeof(int));\n```",
+      "reasoning": "",
+      "ttft_s": 1.0873785049989237,
+      "first_answer_s": 1.0873785049989237,
+      "total_s": 12.884848803998466,
+      "prompt_tokens": 5635,
+      "completion_tokens": 151,
+      "generation_tps": 12.714590178940346,
+      "finish_reason": "stop",
+      "turn": 3
+    },
+    {
+      "content": "```c\n/**\n * Returns the number of KV cache rows needed for a sequence of `len` tokens\n * given a cache capacity of `cap`. If `len` exceeds `cap`, returns `cap`;\n * otherwise returns `len`. Handles edge cases where `len` or `cap` is non-positive.\n */\nint kv_rows_needed(int len, int cap) {\n    if (len <= 0) return 0;\n    if (cap <= 0) return len;\n    return len < cap ? len : cap;\n}\n```",
+      "reasoning": "",
+      "ttft_s": 1.144716328000868,
+      "first_answer_s": 1.144716328000868,
+      "total_s": 10.668920578000325,
+      "prompt_tokens": 5817,
+      "completion_tokens": 120,
+      "generation_tps": 12.49448215056988,
+      "finish_reason": "stop",
+      "turn": 4
+    }
+  ],
+  "prefix_events": [
+    {
+      "reused": 0,
+      "detail": "no reuse: held=0 cap=6144 prompt=5387"
+    },
+    {
+      "reused": 5485,
+      "prompt": 5540
+    },
+    {
+      "reused": 5594,
+      "prompt": 5635
+    },
+    {
+      "reused": 5786,
+      "prompt": 5817
+    }
+  ],
+  "prefix_reuse_engaged": true
+}

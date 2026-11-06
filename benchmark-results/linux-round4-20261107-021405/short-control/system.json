@@ -1,0 +1,259 @@
+{
+  "utc": "2026-11-06T22:44:56.824406+00:00",
+  "environment": {
+    "COLI_CUDA": "0",
+    "COLI_ENGINE": "/home/parzivalprime/personal_proj/c/qwen36",
+    "COLI_LOOKUP": "1",
+    "COLI_TIMERS": "1",
+    "COLI_VK_CHAIN_PROF": "0",
+    "COLI_VK_SHADERS": "/home/parzivalprime/personal_proj/c/shaders",
+    "COLI_VK_TIER": "1",
+    "COLI_VK_TIER_EXCLUSIVE": "0",
+    "COLI_VK_TIER_HOST": "0",
+    "COLI_VK_TIER_RESERVE_GB": "0.5",
+    "COLI_VULKAN": "1",
+    "OMP_NUM_THREADS": "6",
+    "PILOT": "0",
+    "Q36_EVICT": "slru",
+    "Q36_HEAT": "1",
+    "Q36_HEAT_WAIT": "1",
+    "Q36_IO_THREADS": "8",
+    "Q36_LOOKAHEAD": "1",
+    "Q36_MAXT": "16384",
+    "Q36_RAM_FRAC": "0.80",
+    "Q36_SLRU_PROT": "0.8",
+    "Q36_VK_TIER_MIN_ROWS": "64",
+    "Q36_XPACK": "1",
+    "SNAP": "/home/parzivalprime/colibri-models/qwen36-35b"
+  },
+  "system": {
+    "monotonic_s": 13858.993929706,
+    "meminfo": "MemTotal:       15747440 kB\nMemFree:        12725196 kB\nMemAvailable:   13958456 kB\nBuffers:             656 kB\nCached:          1455956 kB\nSwapCached:          428 kB\nActive:           426000 kB\nInactive:        1375040 kB\nActive(anon):     350092 kB\nInactive(anon):     7980 kB\nActive(file):      75908 kB\nInactive(file):  1367060 kB\nUnevictable:          96 kB\nMlocked:              96 kB\nSwapTotal:      15747068 kB\nSwapFree:       15684444 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:              3392 kB\nWriteback:             0 kB\nAnonPages:        344216 kB\nMapped:           260880 kB\nShmem:             13724 kB\nKReclaimable:      82564 kB\nSlab:             258480 kB\nSReclaimable:      82564 kB\nSUnreclaim:       175916 kB\nKernelStack:       10816 kB\nPageTables:        44072 kB\nSecPageTables:      4648 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:    23620788 kB\nCommitted_AS:    3290976 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:      179332 kB\nVmallocChunk:          0 kB\nPercpu:            15872 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:    102400 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nCmaTotal:              0 kB\nCmaFree:               0 kB\nUnaccepted:            0 kB\nBalloon:               0 kB\nGPUActive:         65536 kB\nGPUReclaim:       117844 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:    14493216 kB\nDirectMap2M:     1658880 kB\nDirectMap1G:     1048576 kB\n",
+    "vmstat": "nr_free_pages 3181299\nnr_free_pages_blocks 207360\nnr_zone_inactive_anon 1995\nnr_zone_active_anon 87523\nnr_zone_inactive_file 341765\nnr_zone_active_file 18977\nnr_zone_unevictable 24\nnr_zone_write_pending 848\nnr_mlock 24\nnr_zspages 3851\nnr_free_cma 0\nnr_unaccepted 0\nnuma_hit 1105621844\nnuma_miss 0\nnuma_foreign 0\nnuma_interleave 2156\nnuma_local 1105423016\nnuma_other 0\nnr_inactive_anon 1995\nnr_active_anon 87523\nnr_inactive_file 341765\nnr_active_file 18977\nnr_unevictable 24\nnr_slab_reclaimable 20641\nnr_slab_unreclaimable 43979\nnr_isolated_anon 0\nnr_isolated_file 0\nworkingset_nodes 507\nworkingset_refault_anon 3435562\nworkingset_refault_file 34442395\nworkingset_activate_anon 517137\nworkingset_activate_file 152849\nworkingset_restore_anon 517170\nworkingset_restore_file 275161\nworkingset_nodereclaim 6883536\nnr_anon_pages 86054\nnr_mapped 65220\nnr_file_pages 364260\nnr_dirty 848\nnr_writeback 0\nnr_shmem 3431\nnr_shmem_hugepages 0\nnr_shmem_pmdmapped 0\nnr_file_hugepages 0\nnr_file_pmdmapped 0\nnr_anon_transparent_hugepages 50\nnr_vmscan_write 13217598\nnr_vmscan_immediate_reclaim 16878\nnr_dirtied 4551893\nnr_written 17410567\nnr_throttled_written 0\nnr_kernel_misc_reclaimable 0\nnr_foll_pin_acquired 292878727\nnr_foll_pin_released 292878727\nnr_vmalloc 44833\nnr_kernel_stack 10816\nnr_page_table_pages 11018\nnr_sec_page_table_pages 1162\nnr_iommu_pages 1162\nnr_swapcached 107\npgpromote_success 0\npgpromote_candidate 0\npgpromote_candidate_nrl 0\npgdemote_kswapd 0\npgdemote_direct 0\npgdemote_khugepaged 0\npgdemote_proactive 0\npgsteal_kswapd 499382891\npgsteal_direct 9354271\npgsteal_khugepaged 4199\npgsteal_proactive 0\npgsteal_anon 13215614\npgsteal_file 495525747\npgscan_kswapd 522961059\npgscan_direct 42756866\npgscan_khugepaged 6550\npgscan_proactive 0\npgscan_anon 69258327\npgscan_file 496466148\npgrotate_anon 56042713\npgrotate_file 940401\npgrefill 103963204\nnr_hugetlb 0\nnr_balloon_pages 0\nnr_kernel_file_pages 18400\nnr_gpu_active 16384\nnr_gpu_reclaim 29461\nnr_dirty_threshold 65536\nnr_dirty_background_threshold 16384\nnr_memmap_pages 0\nnr_memmap_boot_pages 63488\npgpgin 3528755748\npgpgout 69145709\npswpin 3377981\npswpout 13079494\npgalloc_dma 512\npgalloc_dma32 295526276\npgalloc_normal 1332168608\npgalloc_movable 0\npgalloc_device 0\nallocstall_dma 0\nallocstall_dma32 0\nallocstall_normal 24565\nallocstall_movable 123850\nallocstall_device 0\npgskip_dma 0\npgskip_dma32 481\npgskip_normal 1992\npgskip_movable 0\npgskip_device 0\npgfree 1637156661\npgactivate 62667997\npgdeactivate 6\npglazyfree 0\npgfault 499677659\npgmajfault 3502065\npglazyfreed 0\npgreuse 2606540\npgscan_direct_throttle 0\nzone_reclaim_success 0\nzone_reclaim_failed 0\npginodesteal 2699\nslabs_scanned 14309781\nkswapd_inodesteal 77113\nkswapd_low_wmark_hit_quickly 21845\nkswapd_high_wmark_hit_quickly 230\npageoutrun 24623\npgrotated 14640\ndrop_pagecache 0\ndrop_slab 0\noom_kill 0\nnuma_pte_updates 0\nnuma_huge_pte_updates 2333\nnuma_hint_faults 0\nnuma_hint_faults_local 0\nnuma_pages_migrated 0\npgmigrate_success 4611579\npgmigrate_fail 2038\nthp_migration_success 0\nthp_migration_fail 0\nthp_migration_split 0\ncompact_migrate_scanned 14780438\ncompact_free_scanned 38250403\ncompact_isolated 10730771\ncompact_stall 1220\ncompact_fail 187\ncompact_success 1033\ncompact_daemon_wake 9892\ncompact_daemon_migrate_scanned 12803664\ncompact_daemon_free_scanned 34627070\nhtlb_buddy_alloc_success 0\nhtlb_buddy_alloc_fail 0\ncma_alloc_success 0\ncma_alloc_fail 0\nunevictable_pgs_culled 20316\nunevictable_pgs_scanned 2025\nunevictable_pgs_rescued 5727\nunevictable_pgs_mlocked 3737\nunevictable_pgs_munlocked 3692\nunevictable_pgs_cleared 0\nunevictable_pgs_stranded 21\nthp_fault_alloc 736432\nthp_fault_fallback 56452\nthp_fault_fallback_charge 0\nthp_collapse_alloc 1870\nthp_collapse_alloc_failed 12\nthp_file_alloc 0\nthp_file_fallback 0\nthp_file_fallback_charge 0\nthp_file_mapped 0\nthp_split_page 868\nthp_split_page_failed 0\nthp_deferred_split_page 23113\nthp_underused_split_page 492\nthp_split_pmd 25449\nthp_scan_exceed_none_pte 280\nthp_scan_exceed_swap_pte 2562\nthp_scan_exceed_share_pte 0\nthp_split_pud 0\nthp_zero_page_alloc 1\nthp_zero_page_alloc_failed 0\nthp_swpout 1334\nthp_swpout_fallback 265\nballoon_inflate 0\nballoon_deflate 0\nballoon_migrate 0\nswap_ra 0\nswap_ra_hit 4\nswpin_zero 58060\nswpout_zero 136394\nksm_swpin_copy 0\ncow_ksm 0\nzswpin 0\nzswpout 0\nzswpwb 0\ndirect_map_level2_splits 7063\ndirect_map_level3_splits 11\ndirect_map_level2_collapses 0\ndirect_map_level3_collapses 0\nnrswpin 3377981\nnrswpout 12397820\nnr_unstable 0\n",
+    "pressure/memory": "some avg10=0.00 avg60=3.58 avg300=11.68 total=251339312\nfull avg10=0.00 avg60=3.58 avg300=11.68 total=250148473\n",
+    "cpu_mhz": [
+      "3481.496",
+      "1102.866",
+      "1102.866",
+      "3504.910",
+      "3492.179",
+      "1102.866",
+      "3502.580",
+      "3515.108",
+      "1102.866",
+      "1102.866",
+      "1102.866",
+      "1102.866",
+      "1102.866",
+      "1102.866",
+      "4366.921",
+      "1102.866"
+    ]
+  },
+  "build_config": "gcc|-O3 -march=native -fopenmp -pthread -Wall -Wextra -Wno-unused-parameter -Wno-misleading-indentation -Wno-unused-function  -MMD -MP -DCOLI_VULKAN|-lm -fopenmp -pthread  -ldl|CUDA=0|CUDA_DLL=0|ARCH=native|CUDA_ARCH=native|METAL=0|HIP=0|HIP_DLL=0|HIP_ARCH=native|VK=1|XDNA=0\n",
+  "shader_sha256": {
+    "attention_absorb.spv": "42b33fa2eef3fb4cb095774453ff594ccbb4a7edb982917e35a1f4ded00537b7",
+    "chain_ares.spv": "22fd5d7116ab38aacac8dc40423f380938541e43243d173abc0a01d36425898d",
+    "chain_attn.spv": "04be7bab8cd70c25f62e19910a9f0905425ce2f50a9d3ca98edb23193aa3a439",
+    "chain_attn_coop.spv": "2186c96e1cde53b44d5b184bdfc5fbc6cd1bd463aabfddd0641a98be8d7c333c",
+    "chain_attn_dec.spv": "17e21cb50649088bd47f5d974382f0cc39795759871a83c1ec1e23825ba3ce47",
+    "chain_attn_flash.spv": "89ab26267a8cd5228a419868175a9d0f16aaa673d4ee3ae2683eea399d3c6591",
+    "chain_attn_full.spv": "0c8095932f34f8875c406e272e9ea3b38f8193f3e191b91f2ae412a9f4fad9b2",
+    "chain_attnb.spv": "45d36a3a637435e0ea43b12cf6a3728af30baace4e269fe7623407ed642558ab",
+    "chain_copy2d.spv": "361df7d0552ec17c48de948f7f95626ab64f48e911d2dbee28d92a8959ffee9b",
+    "chain_dnconv.spv": "50ecd5b08be6f1dcf19c199db4305eeed8934ccc6cd465f1aa631cd3109d604e",
+    "chain_dnconv_rows.spv": "05256291b33a14a898c676fe1bae5292b072ac5e77195933c39ec2c4a5afb3f8",
+    "chain_dnrec.spv": "d338f7f69978b03b9a5c909b5348f2270cbea93b66d08c61852deeed32302d81",
+    "chain_dnrec_rows.spv": "f529d1e701dff30ad8375654c5cce836c16ff475cb96356d7a1dc7b0a7bd4679",
+    "chain_dsa.spv": "2511e4351b5a56c2a74fabcb7770921e0de64d03ea0599568ddfc061f5756f43",
+    "chain_dsv4.spv": "a27a4dc16f9fcb6a42582ebeec61be6eb8a3a23ec74739f6f2c755a81cc6d12d",
+    "chain_enc.spv": "f0dcc7089a384ac7786916593b0bdde83f46572bdb027f6749614ffd40be2605",
+    "chain_ew.spv": "0a5fe549d7f769977180c7a2afdf1febd987773ed1087dd75eae355ac68fb5aa",
+    "chain_fetch.spv": "c0b75aedcbe99132a6c803cfe9697dc1c32de3c23a76c87c3b4ae232dd1e0389",
+    "chain_gemm.spv": "de90e03f276a87b3f9db4067db2a575d331ba11bd4d6a38d1faf78980100689a",
+    "chain_gemv.spv": "0e69b60ac031ae7f07ac12dc6cb54c43e50bc853eb42c48fd9e77328a46b4890",
+    "chain_gemv2.spv": "6428831ad70b024df81dd42beeb1965f6426feeaa49b0c3370549929348f530b",
+    "chain_gemv_bd.spv": "6945ccadcd6691917faefadbad4eebc3cd69903bae4ec72736e9c361c5620d84",
+    "chain_gemv_bd_i8.spv": "90735cc6bd3b1773e58620bba56a79836fafd1e3921df42121279c8befc7da02",
+    "chain_hgemv.spv": "ca76994f1319077cfcd7e6e849bf447691bd7b4b6cebdafe43f3bac1a5fc43a1",
+    "chain_kda.spv": "4ebdf922fe968021fc789c71819ac5c7165320addf1e4f4ebc3808c3e268a85b",
+    "chain_kda_rows.spv": "4e9fc6311f215c425a4fc34b2c973947618db3635d2160ed68688d0e092959ce",
+    "chain_kvs.spv": "b0d0422ef2b2392ef81d675c427c6ed49e400baedc3fd7057d5d9b92f2722fcb",
+    "chain_mhc.spv": "5d71eb9cd12e7144e11a0cfb9725ec17b95819a312353bcf983bc47ceacbab75",
+    "chain_mla.spv": "d8a5081f947e3e154aef4cd5082b61065407f8ca82404b1ed979ce14422cca89",
+    "chain_mla_dec.spv": "8a9b775e30e27b0e461d8ce01d3737a1ba28873693cba83ef77c276fcc057c4a",
+    "chain_moe.spv": "8273cc8897ed835baee0d95d94e8fd87d0fab5709f2073b39efb5d2e5d3eeaae",
+    "chain_moe_gv.spv": "93274401a5e1a48ad261b17f9c78b60c4f9cc1ea81c6422bcc1e2d1a69dede17",
+    "chain_moe_i8.spv": "8cc17b11e0d503c8121bd3693b1b5a508e65caa6bcb1a092c4d0b953bba694ea",
+    "chain_moe_rows.spv": "e64816b2acb551d4de51f07825c290d65694843b56e9ca7184fdd9c2807f37f5",
+    "chain_norm.spv": "cf7afd4f67708f84178daca9e689be4d7428f6f8223b3d3bf984471ca21ead8e",
+    "chain_ple.spv": "4bfcc18c8c53552531bc3b260c6415202c53cada2b7684bc0f2fba44f37053e0",
+    "chain_qsa.spv": "a88f13bef9be4e532ca6a6d9820f08dbeaf0e98fe00bafa15c29e368c6f2c73a",
+    "chain_relattn.spv": "ae894dbc439d60c47d5f78d1a00a923fd0c047b82ae90317d026cb68323b41ce",
+    "chain_rope.spv": "5a36daff6956d9d58e25263d4ea6d4cdd2114ae341a5070d0c9aa386798935cd",
+    "chain_route.spv": "21401d196f1520d201dc27cd24c9b77fde6be986154786e566f4a55f38badc62",
+    "chain_sconv.spv": "acc87e20d2cb4306c0b36ec82c7983e887a6e07af617af9bfbcea401b988e7d3",
+    "chain_vae.spv": "a2bc865ae3bdec47bfd3788a366974e5f82f4dbe4324fc66dd05516368be6122",
+    "expert_act.spv": "9782c9143ad3b38e70febc242cc10c2871c96d481b8a367f790443aa11dcd4d5",
+    "expert_act_v4.spv": "e36cc1e7ff0786fefbd51c84fe76441ad14837bc0a5da6e5b75af37080b22c27",
+    "expert_sum.spv": "595637d7329169ed807a94c9ecc437141bcb56643204773c08d845c155547ab0",
+    "qmatmul.spv": "44a5791fd46f62588d87e5ff7506f3c139e7620c7f4c8da10b17c81a3312a31f",
+    "qmatmul_bd.spv": "2efdf14299d367e33df8e7a07b0fc06582d79239cb24c4811612ea30bddf9203",
+    "qmatmul_coop.spv": "6f1b14a3d7d4c0fa47b23dca2d0677f85ac243c4e8be33e2b00d956fc7fa4100",
+    "qmatmul_gate_up.spv": "d3ebdb14cce9af698e23474df3723e0df87564628dcfb8c8c5d5542bcd976032",
+    "qmatmul_gate_up_bd.spv": "b1e4b22d51e98ea329961f8590bfa766064c45e17165fe21b5c6f7d38611c723",
+    "qmatmul_gemm.spv": "2b3b3611892f0d75cb48c0f00761ff36d07b9e7fcbddc22d71ced5e0033ed21c",
+    "qmatmul_gemm_bd.spv": "d1be537d8304c32ec1374a3a3818da5f8ff5eb5dfd673c748d876ff450f58cd1",
+    "qmatmul_gemm_bdc.spv": "50efe5f104d54a43a97971e3732ffe87cce27d1553708e9f76dc62cdf691e5be",
+    "qmatmul_gemm_bdcw.spv": "9e21456a119181fc9abff2a3d699021afe5cd95fa701bf2a62da8300a15bc895",
+    "qmatmul_grp.spv": "f2aa61e9d380fe9201024d41d8501c4687a4ea972794c093906d3b2373c7fce5",
+    "qmatmul_grp_bd.spv": "5eb869caee40aa9a779cf2c0bea8e7dc36a60ed88646e6431b8bd4560fbd8f03",
+    "qmatmul_grp_bdc.spv": "0065d56e3cb6f9ce4e1765a41da58f3541ee8ebe0bf09c4dccb2f69aaa9b17fe",
+    "qmatmul_grp_bdcw.spv": "fbfad78178ac4e596018fea9ad8307d0a80b4faa5a22fc3268ccad501e79e352",
+    "qmatmul_grp_gate_up.spv": "b3ba0a5542e223e13a089c9373810826af10b0a1e4544b918a8f5c86b2142273",
+    "qmatmul_grp_gate_up_bd.spv": "3ca190406a5267b1dc496bab4722b823b5a92b65916e7ab07dcfe0afdd12b463",
+    "qmatmul_grp_gate_up_bdc.spv": "6df942219011db90198bda5f9207680c65221dfe29e66a3ef458065d2c774183",
+    "qmatmul_grp_gate_up_bdcw.spv": "cbdee57ed4ee5ef92bef7feb839de613121f01b93efc21eb5582a4b765e68deb",
+    "qmatmul_grp_gate_up_q.spv": "12941f41ceeb38b55e8a4bda559cd4681ab8bf70ed631f8c3f735c7bf5259159",
+    "qmatmul_grp_gate_up_qc.spv": "3760c55bc5ac3f5a6a07d8a55e867aad00d7ca788fb11f12bd3594d103814ec0",
+    "qmatmul_grp_gemv.spv": "9130e028185ac544c9cf7a2d966b5844165f3e38dbe3b8dabf65ef5ae4088ad6",
+    "qmatmul_grp_gemv_gate_up.spv": "2e9862e401bd6c2673840b11a286e7ca61f2912f2a9ecb51389239d1efd40dfd",
+    "qmatmul_grp_q.spv": "be0e40eafefb35ea666cb842a0d59babc42842ecbe295c4a6e8c55b67611892d",
+    "qmatmul_grp_qc.spv": "4b693d596f80a3900d4d29b07b82330b82debe49fc62a0a2634b57d6ed96a7bf",
+    "rmsnorm.spv": "90c42c993db6a2ec474e52229196b8d55fedf6ba0f2a5801296b6a08c08c6176"
+  },
+  "probes": [
+    {
+      "command": [
+        "git",
+        "-C",
+        "/home/parzivalprime/personal_proj",
+        "rev-parse",
+        "HEAD"
+      ],
+      "exit_code": 0,
+      "stdout": "4e1e67fa4ec039d0e9795aa1cb664e9715b1a0fa\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "git",
+        "-C",
+        "/home/parzivalprime/personal_proj",
+        "status",
+        "--short"
+      ],
+      "exit_code": 0,
+      "stdout": "?? benchmark-results/agent-run/\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "uname",
+        "-a"
+      ],
+      "exit_code": 0,
+      "stdout": "Linux cachyos-x8664 7.3.1-1-cachyos #1 SMP PREEMPT_DYNAMIC Sat, 31 Oct 2026 15:33:05 +0000 x86_64 GNU/Linux\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "lscpu"
+      ],
+      "exit_code": 0,
+      "stdout": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           48 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  16\nOn-line CPU(s) list:                     0-15\nVendor ID:                               AuthenticAMD\nModel name:                              AMD Ryzen 7 5800HS with Radeon Graphics\nCPU family:                              25\nModel:                                   80\nThread(s) per core:                      2\nCore(s) per socket:                      8\nSocket(s):                               1\nStepping:                                0\nMicrocode version:                       0xa500012\nFrequency boost:                         enabled\nCPU(s) scaling MHz:                      57%\nCPU max MHz:                             4465.2612\nCPU min MHz:                             403.4880\nBogoMIPS:                                6388.19\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpb cat_l3 cdp_l3 hw_pstate ssbd mba ibrs ibpb stibp vmmcall fsgsbase bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a rdseed adx smap clflushopt clwb sha_ni xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local user_shstk clzero irperf xsaveerptr rdpru wbnoinvd cppc arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif v_spec_ctrl umip pku ospke vaes vpclmulqdq rdpid overflow_recov succor smca fsrm debug_swap\nVirtualization:                          AMD-V\nL1d cache:                               256 KiB (8 instances)\nL1i cache:                               256 KiB (8 instances)\nL2 cache:                                4 MiB (8 instances)\nL3 cache:                                16 MiB (1 instance)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-15\nVulnerability Gather data sampling:      Not affected\nVulnerability Ghostwrite:                Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Old microcode:             Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Mitigation; Safe RET\nVulnerability Spec store bypass:         Mitigation; Speculative Store Bypass disabled via prctl\nVulnerability Spectre v1:                Mitigation; usercopy/swapgs barriers and __user pointer sanitization\nVulnerability Spectre v2:                Mitigation; Retpolines; IBPB conditional; IBRS_FW; STIBP always-on; RSB filling; PBRSB-eIBRS Not affected; BHI Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Mitigation; Clear CPU buffers\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Mitigation; IBPB before exit to userspace\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "free",
+        "-h"
+      ],
+      "exit_code": 0,
+      "stdout": "               total        used        free      shared  buff/cache   available\nMem:            15Gi       1.7Gi        12Gi        13Mi       1.5Gi        13Gi\nSwap:           15Gi        61Mi        14Gi\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "lsblk",
+        "-o",
+        "NAME,TYPE,ROTA,SIZE,FSTYPE,MOUNTPOINTS,MODEL"
+      ],
+      "exit_code": 0,
+      "stdout": "NAME        TYPE ROTA   SIZE FSTYPE    MOUNTPOINTS MODEL\nzram0       disk    0    15G swap      [SWAP]      \nnvme0n1     disk    0 476.9G                       Micron_2450_MTFDKBA512TFK\n\u251c\u2500nvme0n1p1 part    0   260M vfat                  \n\u251c\u2500nvme0n1p2 part    0    16M                       \n\u251c\u2500nvme0n1p3 part    0 133.5G BitLocker             \n\u251c\u2500nvme0n1p4 part    0 187.5G BitLocker             \n\u251c\u2500nvme0n1p5 part    0     2G vfat      /boot/efi   \n\u251c\u2500nvme0n1p6 part    0   4.4G vfat                  \n\u251c\u2500nvme0n1p7 part    0 147.9G btrfs     /var/tmp    \n\u2502                                      /var/log    \n\u2502                                      /var/cache  \n\u2502                                      /home       \n\u2502                                      /root       \n\u2502                                      /srv        \n\u2502                                      /           \n\u251c\u2500nvme0n1p8 part    0   1.1G ntfs                  \n\u2514\u2500nvme0n1p9 part    0   260M vfat                  \n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "findmnt",
+        "-T",
+        "/home/parzivalprime/colibri-models/qwen36-35b"
+      ],
+      "exit_code": 0,
+      "stdout": "TARGET SOURCE                 FSTYPE OPTIONS\n/home  /dev/nvme0n1p7[/@home] btrfs  rw,noatime,compress=zstd:1,ssd,discard=async,space_cache=v2,subvolid=257,subvol=/@home\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "df",
+        "-h",
+        "/home/parzivalprime/colibri-models/qwen36-35b"
+      ],
+      "exit_code": 0,
+      "stdout": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/nvme0n1p7  148G   54G   93G  37% /home\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "nvidia-smi"
+      ],
+      "exit_code": 0,
+      "stdout": "Sat Nov  7 04:14:58 2026       \n+-----------------------------------------------------------------------------------------+\n| NVIDIA-SMI 615.78.08              KMD Version: 615.78.08     CUDA UMD Version: 13.4     |\n+-----------------------------------------+------------------------+----------------------+\n| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |\n| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |\n|                                         |                        |               MIG M. |\n|=========================================+========================+======================|\n|   0  NVIDIA GeForce RTX 3050 ...    Off |   00000000:01:00.0 Off |                  N/A |\n| N/A   48C    P0              7W /   50W |      15MiB /   4096MiB |      7%      Default |\n|                                         |                        |                  N/A |\n+-----------------------------------------+------------------------+----------------------+\n\n+-----------------------------------------------------------------------------------------+\n| Processes:                                                                              |\n|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |\n|        ID   ID                                                               Usage      |\n|=========================================================================================|\n|    0   N/A  N/A          116129      G   /usr/lib/Xorg                             4MiB |\n+-----------------------------------------------------------------------------------------+\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "vulkaninfo",
+        "--summary"
+      ],
+      "exit_code": 0,
+      "stdout": "==========\nVULKANINFO\n==========\n\nVulkan Instance Version: 1.4.363\n\n\nInstance Extensions: count = 27\n-------------------------------\nVK_EXT_acquire_drm_display             : extension revision 1\nVK_EXT_acquire_xlib_display            : extension revision 1\nVK_EXT_debug_report                    : extension revision 10\nVK_EXT_debug_utils                     : extension revision 2\nVK_EXT_direct_mode_display             : extension revision 1\nVK_EXT_display_surface_counter         : extension revision 1\nVK_EXT_headless_surface                : extension revision 1\nVK_EXT_layer_settings                  : extension revision 2\nVK_EXT_surface_maintenance1            : extension revision 1\nVK_EXT_swapchain_colorspace            : extension revision 5\nVK_KHR_device_group_creation           : extension revision 1\nVK_KHR_display                         : extension revision 23\nVK_KHR_external_fence_capabilities     : extension revision 1\nVK_KHR_external_memory_capabilities    : extension revision 1\nVK_KHR_external_semaphore_capabilities : extension revision 1\nVK_KHR_get_display_properties2         : extension revision 1\nVK_KHR_get_physical_device_properties2 : extension revision 2\nVK_KHR_get_surface_capabilities2       : extension revision 1\nVK_KHR_portability_enumeration         : extension revision 1\nVK_KHR_surface                         : extension revision 25\nVK_KHR_surface_maintenance1            : extension revision 1\nVK_KHR_surface_protected_capabilities  : extension revision 1\nVK_KHR_wayland_surface                 : extension revision 6\nVK_KHR_xcb_surface                     : extension revision 6\nVK_KHR_xlib_surface                    : extension revision 6\nVK_LUNARG_direct_driver_loading        : extension revision 1\nVK_NV_display_stereo                   : extension revision 1\n\nInstance Layers: count = 4\n--------------------------\nVK_LAYER_MESA_anti_lag      Open-source implementation of the VK_AMD_anti_lag extension. 1.4.303  version 1\nVK_LAYER_MESA_device_select Linux device selection layer                                 1.4.303  version 1\nVK_LAYER_NV_optimus         NVIDIA Optimus layer                                         1.4.351  version 1\nVK_LAYER_NV_present         NVIDIA Presentation Layer                                    1.4.351  version 1\n\nDevices:\n========\nGPU0:\n\tapiVersion         = 1.4.354\n\tdriverVersion      = 26.2.5\n\tvendorID           = 0x1002\n\tdeviceID           = 0x1638\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU\n\tdeviceName         = AMD Radeon Graphics (RADV RENOIR)\n\tdriverID           = DRIVER_ID_MESA_RADV\n\tdriverName         = radv\n\tdriverInfo         = Mesa 26.2.5-arch3.1\n\tconformanceVersion = 1.4.5.3\n\tdeviceUUID         = 00000000-0400-0000-0000-000000000000\n\tdriverUUID         = 414d442d-4d45-5341-2d44-525600000000\nGPU1:\n\tapiVersion         = 1.4.351\n\tdriverVersion      = 615.78.8.0\n\tvendorID           = 0x10de\n\tdeviceID           = 0x25a2\n\tdeviceType         = PHYSICAL_DEVICE_TYPE_DISCRETE_GPU\n\tdeviceName         = NVIDIA GeForce RTX 3050 Laptop GPU\n\tdriverID           = DRIVER_ID_NVIDIA_PROPRIETARY\n\tdriverName         = NVIDIA\n\tdriverInfo         = 615.78.08\n\tconformanceVersion = 1.4.3.3\n\tdeviceUUID         = a7e86926-d9df-3d48-8980-06e5245ac866\n\tdriverUUID         = ad632510-8a66-58c8-aa0c-9ffd3f6f97fe\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "powerprofilesctl",
+        "get"
+      ],
+      "exit_code": 0,
+      "stdout": "performance\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "sensors"
+      ],
+      "exit_code": 0,
+      "stdout": "mt7921_phy0-pci-0200\nAdapter: PCI adapter\ntemp1:        +38.0\u00b0C  \n\nk10temp-pci-00c3\nAdapter: PCI adapter\nTctl:         +63.5\u00b0C  \n\nBAT0-acpi-0\nAdapter: ACPI interface\nin0:          11.88 V  \npower1:        0.00 W  \n\namdgpu-pci-0400\nAdapter: PCI adapter\nvddgfx:      987.00 mV \nvddnb:       893.00 mV \nedge:         +54.0\u00b0C  \nPPT:          12.00 W  \nsclk:         400 MHz \n\nasus-isa-000a\nAdapter: ISA adapter\ncpu_fan:     3600 RPM\ngpu_fan:     3000 RPM\npwm1:             N/A\npwm2:             N/A\n\nnvme-pci-0300\nAdapter: PCI adapter\nComposite:    +35.9\u00b0C  (low  =  -0.1\u00b0C, high = +82.8\u00b0C)\n                       (crit = +84.8\u00b0C)\nSensor 1:     +35.9\u00b0C  (low  = -273.1\u00b0C, high = +65261.8\u00b0C)\n\nacpitz-acpi-0\nAdapter: ACPI interface\ntemp1:        +62.0\u00b0C  \n\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "cc",
+        "--version"
+      ],
+      "exit_code": 0,
+      "stdout": "cc (GCC) 16.2.1 20260810\nCopyright (C) 2026 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n",
+      "stderr": ""
+    },
+    {
+      "command": [
+        "glslc",
+        "--version"
+      ],
+      "exit_code": 0,
+      "stdout": "2026.4\n1:1.4.363.0\n1:1.4.363.0\n\nTarget: SPIR-V 1.0\n",
+      "stderr": ""
+    }
+  ]
+}
