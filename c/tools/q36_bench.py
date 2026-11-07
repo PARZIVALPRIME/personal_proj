@@ -13,13 +13,16 @@ import shutil
 import statistics
 import subprocess
 import sys
+import tempfile
+import threading
 import time
 from datetime import datetime, timezone
 
 
 ROOT = Path(__file__).resolve().parents[2]
 RESULTS = ROOT / "benchmark-results"
-DEFAULT_CONF = Path(os.environ.get("Q36_CONF") or Path.home() / ".config" / "colibri" / "q36.env")
+DEFAULT_CONF = (Path(os.environ["Q36_CONF"]) if os.environ.get("Q36_CONF") not in (None, "", "none")
+                else Path.home() / ".config" / "colibri" / "q36.env")
 PROFILES = {
     # baseline = the launcher's defaults: 6 compute threads, Q36_RAM_FRAC=0.80
     "baseline": {},
@@ -42,16 +45,21 @@ PROFILES = {
     "ram80": {"Q36_RAM_FRAC": "0.80"},
     "ram75": {"Q36_RAM_FRAC": "0.75"},
     "threads6-ram80": {"OMP_NUM_THREADS": "6", "Q36_RAM_FRAC": "0.80"},
-    # decode levers that need no setup (all lossless: same model, same routing)
+    # Same model/routing; alternate GPU arithmetic still needs output parity checks.
     "la2": {"Q36_LOOKAHEAD": "2"},                              # experts read 2 layers ahead
     "la2x8": {"Q36_LOOKAHEAD": "2", "Q36_LOOKAHEAD_EXTRA": "8"},  # ...and 8 extra candidates
     "tierdec": {"Q36_VK_TIER_MIN_ROWS": "1"},                   # GPU-resident experts help decode
     "gemv2": {"COLI_VK_CHAIN_GEMV2": "1"},                      # other int8 decode GEMV on NVIDIA
     "lookup7": {"COLI_LOOKUP_DRAFTS": "7"},                     # longer prompt-lookup drafts
     # the MTP draft head (needs `turbo-qwen36.sh mtp-setup` and SNAP=<base>-mtp)
-    "mtp1": {"Q36_MTP": "1"},
+    "mtp1": {"Q36_MTP": "1", "Q36_MTP_DRAFTS": "1"},
     "mtp2": {"Q36_MTP": "1", "Q36_MTP_DRAFTS": "2"},
     "mtpauto": {"Q36_MTP": "1", "Q36_MTP_DRAFTS": "auto"},
+    # Bound CPU polling on this power-sharing laptop; opt-in until measured.
+    "spin0": {"COLI_VK_CHAIN_SPIN_US": "0"},
+    "spin200": {"COLI_VK_CHAIN_SPIN_US": "200"},
+    "spin2000": {"COLI_VK_CHAIN_SPIN_US": "2000"},
+    "spin2000-io4": {"COLI_VK_CHAIN_SPIN_US": "2000", "Q36_IO_THREADS": "4"},
 }
 METRICS = {
     "prompt_tokens": r"\[enc\] prompt tokens:\s*(\d+)",
@@ -68,10 +76,18 @@ METRICS = {
     "peak_rss_gb": r"PEAK RSS:\s*([\d.]+)\s*GB",
     "tokens_per_forward": r"\[qwen36 (?:lookup|mtp)\] run:\s*([\d.]+)\s*tokens/forward",
     "mtp_acceptance_pct": r"\[qwen36 mtp\] run:.*?acceptance\s*([\d.]+)%",
+    "cache_slots_per_layer": r"\[q36 bench\] cache_slots_per_layer=(\d+)",
+    "decode_vk_wait_ms": r"\[q36 decode vk\].*?wait_ms=([\d.]+)",
+    "decode_vk_frames": r"\[q36 decode vk\] frames=(\d+)",
+    "decode_vk_bytes_up": r"\[q36 decode vk\].*?bytes_up=(\d+)",
+    "decode_vk_bytes_down": r"\[q36 decode vk\].*?bytes_down=(\d+)",
     # derived below: generated tokens after the first, over generation time after TTFT
     "decode_tps": None,
+    "generated_tokens": None,
 }
 SPEED_DETAIL = re.compile(r"Speed:\s*[\d.]+\s*tok/s\s*\(([\d.]+)s for (\d+) tokens\)")
+EXACT_DETAIL = re.compile(
+    r"\[q36 bench\] generated=(\d+) total_s=([\d.]+) ttft_s=([\d.]+) ids_fnv64=([0-9a-f]{16})")
 
 
 def parse_metrics(text):
@@ -88,7 +104,33 @@ def parse_metrics(text):
         generating = total - values["ttft_s"]
         if tokens > 1 and generating > 0:
             values["decode_tps"] = round((tokens - 1) / generating, 2)
+    exact = EXACT_DETAIL.findall(text)
+    if exact:
+        tokens, total, first, _ = exact[-1]
+        tokens, total, first = int(tokens), float(total), float(first)
+        values["generated_tokens"] = tokens
+        values["ttft_s"] = first
+        if tokens > 1 and total > first:
+            values["decode_tps"] = (tokens - 1) / (total - first)
+    if "[qwen36 mtp] run:" in text:
+        # Old engine versions mix multi-row verifies with single-row phase counters.
+        for key in ("step_ms", "fetch_ms", "compute_ms"):
+            values.pop(key, None)
     return values
+
+
+@contextmanager
+def controlled_heat(env, output, label, seed):
+    """Each process gets its own history copy; the model's normal history is untouched."""
+    if seed is None:
+        yield env
+        return
+    path = output / f"{label}.heat"
+    shutil.copyfile(seed, path)
+    try:
+        yield {**env, "Q36_HEAT": str(path.resolve()), "Q36_HEAT_WAIT": "1"}
+    finally:
+        path.unlink(missing_ok=True)
 
 
 def sha256(path):
@@ -102,7 +144,9 @@ def sha256(path):
 def selected_environment(env):
     prefixes = ("Q36_", "QWEN", "COLI_", "OMP_", "GOMP_", "KMP_", "VK_")
     return {
-        k: v for k, v in sorted(env.items())
+        k: ("[REDACTED]" if any(secret in k.upper() for secret in
+                                ("API_KEY", "PASSWORD", "SECRET", "ACCESS_TOKEN", "AUTH_TOKEN")) else v)
+        for k, v in sorted(env.items())
         if k.startswith(prefixes) or k in ("SNAP", "N_NEW", "RAM_GB", "PILOT", "PROMPT")
     }
 
@@ -153,6 +197,36 @@ def memory_warnings(memory):
     if memory.get("pswpin_delta", 0) or memory.get("pswpout_delta", 0):
         warnings.append("System swap activity occurred; counters are system-wide, not engine-only.")
     return warnings
+
+
+@contextmanager
+def system_monitor(output, pid):
+    """Sample a persistent gateway and its engine children without blocking streaming."""
+    stop = threading.Event()
+    errors = []
+
+    def collect():
+        try:
+            with (output / "system.jsonl").open("w", encoding="utf-8") as stream:
+                while not stop.is_set():
+                    sample = sample_system(pid)
+                    children = read_optional(Path("/proc") / str(pid) / "task" / str(pid) / "children")
+                    sample["children"] = [sample_system(int(child)) for child in (children or "").split()]
+                    stream.write(json.dumps(sample) + "\n")
+                    stream.flush()
+                    stop.wait(1)
+        except OSError as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=collect, daemon=True)
+    worker.start()
+    try:
+        yield
+    finally:
+        stop.set()
+        worker.join()
+        if errors:
+            raise RuntimeError(f"system telemetry failed: {errors[0]}") from errors[0]
 
 
 @contextmanager
@@ -220,7 +294,31 @@ def diagnostics(env):
 
 
 def write_json(path, value):
-    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    write_text_atomic(path, json.dumps(value, indent=2) + "\n")
+
+
+def write_text_atomic(path, text):
+    temp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=path.name + ".", suffix=".tmp", delete=False) as stream:
+            temp = Path(stream.name)
+            stream.write(text)
+            stream.flush()
+            os.fsync(stream.fileno())
+        for attempt in range(5):
+            try:
+                os.replace(temp, path)
+                break
+            except PermissionError:
+                if os.name != "nt" or attempt == 4:
+                    raise
+                print(f"WARNING: atomic replacement temporarily denied for {path}; retrying",
+                      file=sys.stderr)
+                time.sleep(0.1 * (attempt + 1))
+    finally:
+        if temp is not None:
+            temp.unlink(missing_ok=True)
 
 
 def validate_run(env, prompt):
@@ -252,6 +350,7 @@ def run_once(env, prompt, output, label, timeout, monitor_gpu=True):
         "requested_output_tokens": int(env["N_NEW"]) if env.get("N_NEW") else None,
         "engine_sha256": sha256(engine), "prompt_sha256": sha256(prompt),
         "started_utc": datetime.now(timezone.utc).isoformat(),
+        "starting_mem_available_kib": counter(sample_system()["meminfo"], "MemAvailable"),
     }
     start = time.monotonic()
     timed_out = False
@@ -294,7 +393,17 @@ def run_once(env, prompt, output, label, timeout, monitor_gpu=True):
     text = log_path.read_text(encoding="utf-8", errors="replace")
     last = sample_system()
     metrics = parse_metrics(text)
+    exact = EXACT_DETAIL.findall(text)
+    record["decode_timing"] = "engine_monotonic" if exact else "rounded_footer"
+    if exact:
+        record["generated_ids_fnv64"] = exact[-1][3]
     record["vk_profile"] = [line for line in text.splitlines() if line.startswith("[VK] chain profile")]
+    record["decode_cache"] = [
+        {"layer": int(layer), "slots": int(slots), "hits": int(hits), "misses": int(misses),
+         "load_ms": float(load)}
+        for layer, slots, hits, misses, load in re.findall(
+            r"\[q36 decode cache\] layer=(\d+) slots=(\d+) hits=(\d+) misses=(\d+) load_ms=([\d.]+)", text)
+    ]
     complete = "ttft_s" in metrics and "reported_speed_tps" in metrics
     record.update(exit_code=code, timed_out=timed_out,
                   wall_s=time.monotonic() - start, metrics=metrics,
@@ -346,8 +455,13 @@ def summarize(records):
             values = [r.get("system_memory", {}).get(key) for r in valid]
             values = [value for value in values if value is not None]
             if values:
+                row[key + "_count"] = len(values)
                 row[key + "_min"] = min(values)
                 row[key + "_max"] = max(values)
+        hashes = [r.get("generated_ids_fnv64") for r in valid]
+        row["output_hash_count"] = sum(h is not None for h in hashes)
+        row["output_hashes"] = sorted({h for h in hashes if h is not None})
+        row["engine_timing_runs"] = sum(r.get("decode_timing") == "engine_monotonic" for r in valid)
         result.append(row)
     return result
 
@@ -396,15 +510,17 @@ def profile_settings(profile):
 def _eligible(row, min_available_kib):
     available = row.get("min_available_kib_min")
     return (row.get("valid_runs", 0) >= 2 and not row.get("failed_runs")
-            and (available is None or available >= min_available_kib))
+            and available is not None and available >= min_available_kib
+            and row.get("min_available_kib_count") == row.get("valid_runs")
+            and row.get("decode_tps_count") == row.get("valid_runs")
+            and row.get("ttft_s_count") == row.get("valid_runs"))
 
 
-def pick_best(rows, metric="decode_tps", min_gain=0.03, min_available_kib=512 * 1024,
+def pick_best(rows, metric="decode_tps", min_gain=0.05, min_available_kib=1024 * 1024,
               primary="bench", long_slack=0.05):
     """The profile to keep, by fixed rules (printed so the decision can be checked):
-    every one of its rows succeeded with >= 2 measured runs and >= 512 MiB of RAM free;
-    its `primary` workload's median `metric` beats baseline by >= min_gain; on the long
-    workload, if measured, its median metric and TTFT are no more than long_slack worse.
+    Complete short and long workloads, known memory, exact timing and output parity
+    are required. The primary gain must not regress the other workload.
     Returns (profile, reasons) -- 'baseline' when nothing qualifies."""
     by_profile = {}
     for row in rows:
@@ -412,8 +528,9 @@ def pick_best(rows, metric="decode_tps", min_gain=0.03, min_available_kib=512 * 
     if "baseline" not in by_profile:
         raise ValueError("the sweep has no baseline profile to compare against")
     base = by_profile["baseline"]
-    if primary not in base:
-        primary = next(iter(base))
+    required = {"bench", "long"}
+    if not required.issubset(base) or not all(_eligible(base[w], min_available_kib) for w in required):
+        raise ValueError("baseline needs complete bench and long measurements with known memory")
     base_score = base[primary].get(f"{metric}_median")
     if base_score is None:
         raise ValueError(f"baseline has no {metric} on {primary}")
@@ -421,8 +538,21 @@ def pick_best(rows, metric="decode_tps", min_gain=0.03, min_available_kib=512 * 
     for profile, workloads in by_profile.items():
         if profile == "baseline":
             continue
-        if not all(_eligible(row, min_available_kib) for row in workloads.values()):
-            reasons[profile] = "rejected: failed runs, <2 measured runs or <512 MiB RAM free"
+        if not required.issubset(workloads) or not all(
+                _eligible(workloads[w], min_available_kib) for w in required):
+            reasons[profile] = "rejected: incomplete workloads/metrics, failed runs or <1 GiB RAM free"
+            continue
+        if any(workloads[w]["valid_runs"] != base[w]["valid_runs"] for w in required):
+            reasons[profile] = "rejected: unequal measured run counts"
+            continue
+        if any(row.get("engine_timing_runs") != row["valid_runs"]
+               or row.get("output_hash_count") != row["valid_runs"]
+               for row in [*(base[w] for w in required), *(workloads[w] for w in required)]):
+            reasons[profile] = "rejected: missing exact timing or generated-token parity evidence; rebuild"
+            continue
+        if any(len(base[w].get("output_hashes", [])) != 1
+               or workloads[w].get("output_hashes") != base[w].get("output_hashes") for w in required):
+            reasons[profile] = "rejected: generated-token output differs from baseline"
             continue
         score = workloads.get(primary, {}).get(f"{metric}_median")
         if score is None:
@@ -431,6 +561,10 @@ def pick_best(rows, metric="decode_tps", min_gain=0.03, min_available_kib=512 * 
         gain = score / base_score - 1
         if gain < min_gain:
             reasons[profile] = f"rejected: {primary} {metric} {score:.2f} vs {base_score:.2f} ({gain:+.1%})"
+            continue
+        primary_ttft = workloads[primary]["ttft_s_median"]
+        if primary_ttft > base[primary]["ttft_s_median"] * (1 + long_slack):
+            reasons[profile] = "rejected: primary TTFT regression"
             continue
         if "long" in workloads and "long" in base and primary != "long":
             lrow, lbase = workloads["long"], base["long"]
@@ -460,13 +594,13 @@ def read_conf(path):
 
 
 def save_conf(path, settings):
-    values = read_conf(path)
-    values.update(settings)
+    # Replace rather than merge: an old experiment must not contaminate a new winner.
+    values = dict(settings)
     path.parent.mkdir(parents=True, exist_ok=True)
     lines = ["# Settings measured best on this machine (written by q36_bench.py best --save).",
              "# The launcher applies each one unless the same variable is set in the shell.",
              *(f"{key}={value}" for key, value in sorted(values.items()))]
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    write_text_atomic(path, "\n".join(lines) + "\n")
     return values
 
 
@@ -475,10 +609,12 @@ def best_main(argv):
                                      description="Pick the measured winner of a sweep.")
     parser.add_argument("summary", type=Path, help="a sweep's summary.json")
     parser.add_argument("--metric", default="decode_tps")
-    parser.add_argument("--min-gain", type=float, default=0.03)
+    parser.add_argument("--min-gain", type=float, default=0.05)
     parser.add_argument("--save", type=Path, nargs="?", const=DEFAULT_CONF,
-                        help=f"merge the winner into this settings file (default {DEFAULT_CONF})")
+                        help=f"replace this settings file with the measured settings (default {DEFAULT_CONF})")
     args = parser.parse_args(argv)
+    if not 0 < args.min_gain < 1:
+        parser.error("--min-gain must be greater than 0 and less than 1")
     rows = json.loads(args.summary.read_text(encoding="utf-8"))
     best, reasons = pick_best(rows, args.metric, args.min_gain)
     for profile, reason in sorted(reasons.items()):
@@ -491,6 +627,23 @@ def best_main(argv):
     for key, value in settings.items():
         print(f"export {key}={value}")
     if args.save:
+        runs_path = args.summary.with_name("runs.json")
+        if not runs_path.is_file():
+            raise ValueError("--save needs adjacent runs.json with the measured effective environment")
+        runs = json.loads(runs_path.read_text(encoding="utf-8"))
+        winner_runs = [r for r in runs if r.get("profile") == best and not r.get("warmup")
+                       and r.get("status") == "ok"]
+        if not winner_runs:
+            raise ValueError("runs.json has no successful measured winner runs")
+        keys = {key for profile in PROFILES.values() for key in profile}
+        keys.update(("Q36_RAM_FRAC", "Q36_IO_THREADS", "Q36_MTP", "Q36_MAXT",
+                     "COLI_LOOKUP", "COLI_VK_TIER", "COLI_VK_TIER_RESERVE_GB",
+                     "COLI_VK_TIER_HOST", "COLI_VK_TIER_EXCLUSIVE"))
+        effective = [{k: v for k, v in r.get("environment", {}).items() if k in keys}
+                     for r in winner_runs]
+        if not effective[0] or any(e != effective[0] for e in effective[1:]):
+            raise ValueError("winner runs have missing or inconsistent effective settings")
+        settings = {**effective[0], **settings}
         saved = save_conf(args.save, settings)
         print(f"Saved to {args.save}: {' '.join(f'{k}={v}' for k, v in sorted(saved.items()))}",
               file=sys.stderr)
@@ -518,9 +671,20 @@ def main(argv=None):
     parser.add_argument("--stop-on-pressure", action="store_true",
                         help="stop after any run with low available memory or system swap activity")
     parser.add_argument("--output", type=Path)
+    parser.add_argument("--heat-seed", type=Path,
+                        help="copy this existing heat history separately for every engine run")
+    parser.add_argument("--profile-after", type=int, default=None,
+                        help="enable decode-only Vulkan timestamps after prefill, 1 or 2")
     args = parser.parse_args(argv)
+    if args.profile_after is not None and args.profile_after not in (1, 2):
+        parser.error("--profile-after must be 1 or 2")
+    if args.heat_seed is not None and not args.heat_seed.is_file():
+        parser.error("--heat-seed must name an existing heat history file")
     env = dict(os.environ)
     env["COLI_TIMERS"] = "1"
+    env["Q36_BENCH_METRICS"] = "1"
+    if args.profile_after is not None:
+        env["Q36_PROFILE_DECODE"] = str(args.profile_after)
     env["Q36_HEAT_WAIT"] = "1"
     if "N_NEW" in env:
         try:
@@ -530,6 +694,11 @@ def main(argv=None):
     output = args.output or RESULTS / ("linux-" + datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
     output.mkdir(parents=True, exist_ok=False)
     write_json(output / "system.json", diagnostics(env))
+    if args.heat_seed is not None:
+        seed = output / "heat-seed.bin"
+        shutil.copyfile(args.heat_seed, seed)
+        args.heat_seed = seed
+        write_json(output / "heat-seed.json", {"sha256": sha256(seed)})
     print(f"Results: {output}", flush=True)
     if args.mode == "doctor":
         print("Read-only probes saved; unavailable commands have explicit errors in system.json.")
@@ -554,8 +723,9 @@ def main(argv=None):
                 run_env["N_NEW"] = str(args.tokens or positive_int(
                     env.get("N_NEW", "48" if workload == "long" else "128")))
                 label = f"{workload}-{profile}-r{repeat}"
-                record = run_once(run_env, prompts[workload], output, label, args.timeout,
-                                  monitor_gpu=not args.no_gpu_monitor)
+                with controlled_heat(run_env, output, label, args.heat_seed) as run_env:
+                    record = run_once(run_env, prompts[workload], output, label, args.timeout,
+                                      monitor_gpu=not args.no_gpu_monitor)
                 record.update(profile=profile, workload=workload, warmup=repeat == 0)
                 records.append(record)
                 write_json(output / f"{label}.json", record)

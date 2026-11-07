@@ -53,6 +53,39 @@ class BenchTests(unittest.TestCase):
         self.assertEqual(values["tokens_per_forward"], 1.10)
         self.assertEqual(bench.parse_metrics("engine failed"), {})
 
+    def test_environment_capture_does_not_publish_credentials(self):
+        env = bench.selected_environment({"COLI_API_KEY": "private-key", "Q36_RAM_FRAC": "0.80"})
+        self.assertEqual(env["COLI_API_KEY"], "[REDACTED]")
+        self.assertEqual(env["Q36_RAM_FRAC"], "0.80")
+
+    def test_atomic_write_preserves_previous_results_on_replace_failure(self):
+        target = self.base / "results.json"
+        target.write_text('{"old":true}')
+        with mock.patch.object(bench.os, "replace", side_effect=OSError("disk failed")):
+            with self.assertRaisesRegex(OSError, "disk failed"):
+                bench.write_json(target, {"new": True})
+        self.assertEqual(json.loads(target.read_text()), {"old": True})
+        self.assertEqual(list(self.base.glob("*.tmp")), [])
+
+    @unittest.skipUnless(os.name == "nt", "Windows sharing-violation retry")
+    def test_atomic_write_retries_transient_windows_lock(self):
+        target = self.base / "results.json"
+        target.write_text('{"old":true}')
+        replace = os.replace
+        attempts = []
+
+        def locked_once(source, destination):
+            attempts.append(destination)
+            if len(attempts) == 1:
+                raise PermissionError("temporary sharing violation")
+            replace(source, destination)
+
+        with mock.patch.object(bench.os, "replace", side_effect=locked_once), \
+                mock.patch.object(bench.time, "sleep"), contextlib.redirect_stderr(io.StringIO()):
+            bench.write_json(target, {"new": True})
+        self.assertEqual(len(attempts), 2)
+        self.assertEqual(json.loads(target.read_text()), {"new": True})
+
     def test_metrics_match_actual_post_xpack_log(self):
         log = ROOT / "benchmark-results" / "bench-turbo-1793731906.log"
         values = bench.parse_metrics(log.read_text(encoding="utf-8"))
@@ -311,21 +344,69 @@ class BenchTests(unittest.TestCase):
         self.assertEqual(bench.profile_settings("previous"),
                          {"OMP_NUM_THREADS": "auto", "Q36_RAM_FRAC": "0.92"})
 
+    def test_exact_timing_overrides_rounded_footer_and_rejects_mtp_phase_rates(self):
+        text = (OUTPUT + "[q36 bench] generated=128 total_s=7.612345678 "
+                "ttft_s=1.256123456 ids_fnv64=0123456789abcdef\n"
+                "[q36 bench] cache_slots_per_layer=163\n")
+        values = bench.parse_metrics(text)
+        self.assertAlmostEqual(values["decode_tps"], 127 / (7.612345678 - 1.256123456))
+        self.assertEqual(values["cache_slots_per_layer"], 163)
+        values = bench.parse_metrics(text + "[qwen36 mtp] run: 1.92 tokens/forward\n")
+        self.assertNotIn("step_ms", values)
+        self.assertNotIn("fetch_ms", values)
+
+    def test_structured_decode_evidence_is_recorded(self):
+        text = (OUTPUT + "[q36 bench] generated=128 total_s=7.612345678 "
+                "ttft_s=1.256123456 ids_fnv64=0123456789abcdef\n"
+                "[q36 decode cache] layer=0 slots=163 hits=100 misses=3 load_ms=8.000000\n")
+        record = self.run_engine_fixture(f"print({text!r})")
+        self.assertEqual(record["decode_timing"], "engine_monotonic")
+        self.assertEqual(record["generated_ids_fnv64"], "0123456789abcdef")
+        self.assertEqual(record["decode_cache"][0]["misses"], 3)
+        record.update(profile="baseline", workload="bench", warmup=False)
+        row = bench.summarize([record])[0]
+        self.assertEqual(row["engine_timing_runs"], 1)
+        self.assertEqual(row["output_hashes"], ["0123456789abcdef"])
+
+    def test_heat_seed_is_private_reset_each_run_and_cleaned_on_failure(self):
+        seed = self.base / "seed.bin"
+        seed.write_bytes(b"original")
+        for label in ("first", "second"):
+            with self.assertRaisesRegex(RuntimeError, "failed"):
+                with bench.controlled_heat(self.env, self.base, label, seed) as env:
+                    path = Path(env["Q36_HEAT"])
+                    self.assertEqual(path.read_bytes(), b"original")
+                    path.write_bytes(b"modified")
+                    raise RuntimeError("failed")
+            self.assertFalse(path.exists())
+        self.assertEqual(seed.read_bytes(), b"original")
+
+    def test_mtp1_never_inherits_deeper_drafts(self):
+        self.assertEqual(bench.profile_env({"Q36_MTP_DRAFTS": "7"}, "mtp1")["Q36_MTP_DRAFTS"], "1")
+
 
 def _row(profile, workload="bench", decode=20.0, ttft=1.3, runs=3, failed=0, avail=1_400_000):
     return {"profile": profile, "workload": workload, "valid_runs": runs, "failed_runs": failed,
-            "decode_tps_median": decode, "ttft_s_median": ttft, "min_available_kib_min": avail}
+            "decode_tps_median": decode, "ttft_s_median": ttft, "min_available_kib_min": avail,
+            "min_available_kib_count": runs, "decode_tps_count": runs, "ttft_s_count": runs,
+            "engine_timing_runs": runs, "output_hash_count": runs, "output_hashes": ["abc"]}
+
+
+def _both(rows):
+    return rows + [_row(r["profile"], "long", decode=17, ttft=16.5)
+                   for r in rows if r["workload"] == "bench"
+                   and not any(x["profile"] == r["profile"] and x["workload"] == "long" for x in rows)]
 
 
 class PickBestTests(unittest.TestCase):
     def test_fastest_qualifying_profile_wins(self):
         rows = [_row("baseline"), _row("la2", decode=21.0), _row("mtp1", decode=24.0)]
-        best, reasons = bench.pick_best(rows)
+        best, reasons = bench.pick_best(_both(rows))
         self.assertEqual(best, "mtp1")
         self.assertIn("qualifies", reasons["la2"])
 
     def test_small_gain_keeps_baseline(self):
-        best, reasons = bench.pick_best([_row("baseline"), _row("gemv2", decode=20.4)])
+        best, reasons = bench.pick_best(_both([_row("baseline"), _row("gemv2", decode=20.4)]))
         self.assertEqual(best, "baseline")
         self.assertIn("+2.0%", reasons["gemv2"])
 
@@ -336,7 +417,7 @@ class PickBestTests(unittest.TestCase):
                 _row("io6", decode=26.0, failed=1),
                 _row("threads7", decode=26.0, avail=100_000),
                 _row("mtp1", decode=23.0), _row("mtp1", "long", decode=17.5, ttft=16.6)]
-        best, reasons = bench.pick_best(rows)
+        best, reasons = bench.pick_best(_both(rows))
         self.assertEqual(best, "mtp1")
         self.assertIn("long decode_tps", reasons["tierdec"])
         self.assertIn("long TTFT", reasons["la2"])
@@ -351,7 +432,11 @@ class PickBestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
             summary = base / "summary.json"
-            summary.write_text(json.dumps([_row("baseline"), _row("mtp2", decode=26.0)]))
+            summary.write_text(json.dumps(_both([_row("baseline"), _row("mtp2", decode=26.0)])))
+            (base / "runs.json").write_text(json.dumps([
+                {"profile": "mtp2", "warmup": False, "status": "ok",
+                 "environment": {"Q36_MTP": "1", "Q36_MTP_DRAFTS": "2", "OMP_NUM_THREADS": "6"}}
+            ]))
             conf = base / "conf" / "q36.env"
             conf.parent.mkdir()
             conf.write_text("Q36_LOOKAHEAD=2\nQ36_MTP_DRAFTS=1\n", encoding="utf-8")
@@ -361,13 +446,13 @@ class PickBestTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(out.getvalue().split(), ["export", "Q36_MTP=1", "export", "Q36_MTP_DRAFTS=2"])
             saved = bench.read_conf(conf)
-            self.assertEqual(saved, {"Q36_LOOKAHEAD": "2", "Q36_MTP": "1", "Q36_MTP_DRAFTS": "2"})
+            self.assertEqual(saved, {"OMP_NUM_THREADS": "6", "Q36_MTP": "1", "Q36_MTP_DRAFTS": "2"})
             self.assertIn("Result: mtp2", err.getvalue())
 
     def test_best_command_without_winner_changes_nothing(self):
         with tempfile.TemporaryDirectory() as temp:
             summary = Path(temp) / "summary.json"
-            summary.write_text(json.dumps([_row("baseline"), _row("la2", decode=20.1)]))
+            summary.write_text(json.dumps(_both([_row("baseline"), _row("la2", decode=20.1)])))
             conf = Path(temp) / "q36.env"
             out, err = io.StringIO(), io.StringIO()
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -376,9 +461,58 @@ class PickBestTests(unittest.TestCase):
             self.assertFalse(conf.exists())
             self.assertIn("keep the current settings", err.getvalue())
 
+    def test_missing_long_baseline_or_unknown_memory_is_an_error(self):
+        with self.assertRaisesRegex(ValueError, "complete bench and long"):
+            bench.pick_best([_row("baseline")])
+        rows = _both([_row("baseline", avail=None), _row("io4", decode=24)])
+        with self.assertRaisesRegex(ValueError, "known memory"):
+            bench.pick_best(rows)
+
+    def test_missing_candidate_evidence_cannot_be_saved(self):
+        for missing in ("long", "timing", "memory", "parity"):
+            rows = _both([_row("baseline"), _row("io4", decode=24)])
+            candidate = rows[1]
+            if missing == "long":
+                rows = [r for r in rows if not (r["profile"] == "io4" and r["workload"] == "long")]
+            elif missing == "timing":
+                candidate["engine_timing_runs"] = 0
+            elif missing == "memory":
+                candidate["min_available_kib_count"] = 1
+            else:
+                candidate["output_hashes"] = ["different"]
+            best, reasons = bench.pick_best(rows)
+            self.assertEqual(best, "baseline", missing)
+            self.assertIn("rejected", reasons["io4"])
+
 
 @unittest.skipUnless(BASH, "Bash is required for launcher integration tests")
 class LauncherTests(unittest.TestCase):
+    def test_reference_mode_ignores_saved_and_inherited_experiments(self):
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            model = base / "model"
+            model.mkdir()
+            conf = base / "q36.env"
+            conf.write_text("Q36_MTP=1\nOMP_NUM_THREADS=16\n")
+            engine = base / "engine.sh"
+            engine.write_text('#!/usr/bin/env bash\nexit 0\n')
+            engine.chmod(0o755)
+            # doctor records effective environment without requiring the real engine.
+            out = base / "doctor"
+            env = {**os.environ, "Q36_REFERENCE": "1", "SNAP": model.as_posix(),
+                   "Q36_CONF": conf.as_posix(), "Q36_MTP": "1", "OMP_NUM_THREADS": "16",
+                   "RAM_GB": "16", "COLI_LOOKUP_DRAFTS": "7"}
+            result = subprocess.run(
+                [BASH, (ROOT / "benchmark-results" / "turbo-qwen36.sh").as_posix(),
+                 "doctor", "--output", out.as_posix()], env=env, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            effective = json.loads((out / "system.json").read_text())["environment"]
+            self.assertEqual(effective["Q36_MTP"], "0")
+            self.assertEqual(effective["OMP_NUM_THREADS"], "6")
+            self.assertEqual(effective["Q36_RAM_FRAC"], "0.80")
+            self.assertNotIn("RAM_GB", effective)
+            self.assertNotIn("COLI_LOOKUP_DRAFTS", effective)
+
     def test_quality_mode_exports_model_and_propagates_engine_status(self):
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)

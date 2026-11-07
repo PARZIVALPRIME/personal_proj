@@ -9,9 +9,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "c" / "tools"))
 SPEC = importlib.util.spec_from_file_location("q36_agent_bench", ROOT / "c" / "tools" / "q36_agent_bench.py")
 agent = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(agent)
@@ -61,7 +63,7 @@ class Handler(BaseHTTPRequestHandler):
         def send(event):
             self.wfile.write(b"data: " + json.dumps(event).encode() + b"\n\n")
             self.wfile.flush()
-        send({"choices": [{"delta": {"reasoning_content": "."}}]})
+        send({"choices": [{"delta": {"reasoning_content": "."}, "x_colibri_keepalive": True}]})
         time.sleep(0.05)
         if body.get("enable_thinking"):
             send({"choices": [{"delta": {"reasoning_content": "plan"}}]})
@@ -100,7 +102,8 @@ class AgentBenchTests(unittest.TestCase):
                 "--server-command", sys.executable, str(self.script), str(port), mode,
                 str(self.requests)]
         stdout, stderr = io.StringIO(), io.StringIO()
-        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr), \
+                mock.patch.object(agent, "gpu_monitor", return_value=contextlib.nullcontext()):
             code = agent.main(argv)
         record = json.loads((out / "agent.json").read_text())
         return code, record, stderr.getvalue()
@@ -146,6 +149,11 @@ class AgentBenchTests(unittest.TestCase):
         self.assertFalse(record["prefix_reuse_engaged"])
         self.assertIn("no prefix reuse", errors)
 
+    def test_required_reuse_fails_missing_followups(self):
+        code, record, _ = self.run_bench("noreuse", "--turns", "2", "--require-prefix-reuse")
+        self.assertEqual(code, 2)
+        self.assertFalse(record["prefix_reuse_all_followups"])
+
     def test_server_exit_during_start_fails(self):
         code, record, errors = self.run_bench("exit", "--turns", "1")
         self.assertEqual(code, 1)
@@ -174,6 +182,78 @@ class AgentBenchTests(unittest.TestCase):
             "[PREFIX] reusing 900 of 1000 prompt tokens (90%)\n")
         self.assertEqual(events, [{"reused": 0, "detail": "no reuse: held=0 cap=8 prompt=10"},
                                   {"reused": 900, "prompt": 1000}])
+
+    def test_stream_rejects_malformed_truncated_or_missing_usage(self):
+        for lines in (
+            [b"data: nope\n"],
+            [b'data: {"choices":"wrong"}\n'],
+            [b'data: {"choices":[{"delta":{"content":7}}]}\n'],
+            [b'data: {"choices":[{"delta":{"content":"x"}}]}\n'],
+            [b'data: {"choices":[{"delta":{"content":"x"},"finish_reason":"stop"}]}\n',
+             b"data: [DONE]\n"],
+        ):
+            with self.subTest(lines=lines), mock.patch.object(
+                    agent.urllib.request, "urlopen", return_value=contextlib.nullcontext(lines)):
+                with self.assertRaises(RuntimeError):
+                    agent.stream_turn("http://localhost", {}, 1)
+
+    def test_length_finish_is_explicitly_marked(self):
+        lines = [
+            b'data: {"choices":[{"delta":{"content":"x"},"finish_reason":"length"}]}\n',
+            b'data: {"usage":{"prompt_tokens":5,"completion_tokens":2}}\n',
+            b"data: [DONE]\n",
+        ]
+        with mock.patch.object(agent.urllib.request, "urlopen",
+                               return_value=contextlib.nullcontext(lines)):
+            self.assertTrue(agent.stream_turn("http://localhost", {}, 1)["truncated"])
+
+    def test_generated_period_is_not_a_keepalive(self):
+        lines = [
+            b'data: {"choices":[{"delta":{"reasoning_content":"."},"x_colibri_keepalive":true}]}\n',
+            b'data: {"choices":[{"delta":{"reasoning_content":"."}}]}\n',
+            b'data: {"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}\n',
+            b'data: {"usage":{"prompt_tokens":5,"completion_tokens":3}}\n',
+            b"data: [DONE]\n",
+        ]
+        with mock.patch.object(agent.urllib.request, "urlopen",
+                               return_value=contextlib.nullcontext(lines)):
+            self.assertEqual(agent.stream_turn("http://localhost", {}, 1)["reasoning"], ".")
+
+    def test_prior_turns_survive_later_failure(self):
+        turns = []
+        args = mock.Mock(turns=2, max_tokens=8, request_timeout=1, api_key=None, think=False)
+        completed = {"content": "ok", "reasoning": "", "truncated": False,
+                     "prompt_tokens": 1, "ttft_s": 1, "first_answer_s": 1,
+                     "total_s": 2, "completion_tokens": 2, "generation_tps": 1,
+                     "finish_reason": "stop"}
+        with mock.patch.object(agent, "stream_turn", side_effect=[
+                completed, RuntimeError("broken stream")]), contextlib.redirect_stdout(io.StringIO()):
+            with self.assertRaisesRegex(RuntimeError, "broken stream"):
+                agent.run_conversation("http://localhost", args, [], "test", turns)
+        self.assertEqual(len(turns), 1)
+
+    def test_profile_runs_alternate_without_mutating_environment(self):
+        records = []
+        seed = self.base / "seed"
+        seed.write_bytes(b"initial")
+
+        def session(args, output, env=None):
+            records.append((output.name, dict(env)))
+            self.assertEqual(Path(env["Q36_HEAT"]).read_bytes(), b"initial")
+            Path(env["Q36_HEAT"]).write_bytes(b"changed")
+            return 0, {"turns": []}
+
+        with mock.patch.object(agent, "run_session", side_effect=session), \
+                mock.patch.object(agent, "diagnostics", return_value={}):
+            before = dict(os.environ)
+            code = agent.main(["--context", str(self.context), "--output", str(self.base / "profiles"),
+                               "--profiles", "baseline", "io4", "--repeats", "2",
+                               "--heat-seed", str(seed)])
+        self.assertEqual(code, 0)
+        self.assertEqual(dict(os.environ), before)
+        self.assertEqual([r[0] for r in records],
+                         ["r1-baseline", "r1-io4", "r2-io4", "r2-baseline"])
+        self.assertEqual(seed.read_bytes(), b"initial")
 
 
 if __name__ == "__main__":

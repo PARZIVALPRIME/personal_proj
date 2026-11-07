@@ -1850,7 +1850,8 @@ def render_chat_olmoe(messages, enable_thinking=False, reasoning_effort=None, to
 
 
 def render_chat_qwen(messages, enable_thinking=False, reasoning_effort=None, tools=None,
-                     tool_choice=None, add_generation_prompt=True, preserve_thinking=False):
+                     tool_choice=None, add_generation_prompt=True, preserve_thinking=False,
+                     preserve_thinking_whitespace=False):
     """Qwen3.6's chat_template, tool calling included: <|im_start|>role\\n ...
     <|im_end|>\\n frames, then the generation prompt. The official template
     opens a mandatory <think> block after `<|im_start|>assistant\\n` — the
@@ -1876,6 +1877,8 @@ def render_chat_qwen(messages, enable_thinking=False, reasoning_effort=None, too
     the last user query, so a turn generated after the pre-closed think header comes back without
     the header it was fed, the resent history diverges from the engine's state at the first
     assistant turn, and prefix reuse -- all or nothing on a recurrent state -- never engages."""
+    # This non-template opt-in is for clients replaying the model's raw reasoning bytes;
+    # the default stays byte-identical to Qwen's official whitespace-normalizing template.
     if not isinstance(messages, list) or not messages:
         raise APIError(400, "`messages` must be a non-empty array.", "messages")
     if tool_choice == "none":
@@ -1937,9 +1940,14 @@ def render_chat_qwen(messages, enable_thinking=False, reasoning_effort=None, too
                 raise APIError(400, "`reasoning_content` must be a string.",
                                f"messages.{index}.reasoning_content")
             if add_generation_prompt is CONTINUE_IN_THINK:
-                parts.append(f"<|im_start|>assistant\n<think>\n{reasoning.strip()}")
+                if not preserve_thinking_whitespace:
+                    reasoning = reasoning.strip()
+                parts.append(f"<|im_start|>assistant\n<think>\n{reasoning}")
                 continue
-            parts.append(f"<|im_start|>assistant\n<think>\n{reasoning.strip()}\n</think>\n\n"
+            if not preserve_thinking_whitespace:
+                reasoning = reasoning.strip()
+            separator = "" if preserve_thinking_whitespace else "\n"
+            parts.append(f"<|im_start|>assistant\n<think>\n{reasoning}{separator}</think>\n\n"
                          f"{text}")
             continue
         if role == "tool":
@@ -1967,10 +1975,20 @@ def render_chat_qwen(messages, enable_thinking=False, reasoning_effort=None, too
             if reasoning is None:
                 reasoning = ""
                 if "</think>" in text:
-                    reasoning = text.split("</think>")[0].rstrip("\n").split("<think>")[-1].lstrip("\n")
-                    text = text.split("</think>")[-1].lstrip("\n")
+                    before_close, after_close = text.split("</think>", 1)
+                    if preserve_thinking_whitespace:
+                        reasoning = before_close.split("<think>", 1)[-1]
+                        if reasoning.startswith("\n"):
+                            reasoning = reasoning[1:]
+                        text = after_close[2:] if after_close.startswith("\n\n") else after_close
+                    else:
+                        reasoning = before_close.rstrip("\n").split("<think>")[-1].lstrip("\n")
+                        text = after_close.lstrip("\n")
             if preserve_thinking or index > last_query:
-                rendered = f"<think>\n{reasoning.strip()}\n</think>\n\n{text}"
+                if preserve_thinking_whitespace:
+                    rendered = f"<think>\n{reasoning}</think>\n\n{text}"
+                else:
+                    rendered = f"<think>\n{reasoning.strip()}\n</think>\n\n{text}"
             else:
                 rendered = text
             calls = message.get("tool_calls")
@@ -4701,7 +4719,7 @@ def resolve_generation_prompt(messages, body):
 
 def render_chat_for_arch(messages, enable_thinking=False, reasoning_effort=None, tools=None,
                          tool_choice=None, audio_out=None, add_generation_prompt=True,
-                         preserve_thinking=False):
+                         preserve_thinking=False, preserve_thinking_whitespace=False):
     """Render a chat request with the active engine's native prompt contract.
 
     `add_generation_prompt=False` (a continued assistant turn) is implemented for the families
@@ -4734,7 +4752,8 @@ def render_chat_for_arch(messages, enable_thinking=False, reasoning_effort=None,
                                 preserve_thinking)
     if ARCH == "qwen36":
         return render_chat_qwen(messages, enable_thinking, reasoning_effort, tools,
-                                tool_choice, add_generation_prompt, preserve_thinking)
+                                tool_choice, add_generation_prompt, preserve_thinking,
+                                preserve_thinking_whitespace)
     if chat_flavor() == "mistral_large4":
         return render_chat_mistral_large4(messages, enable_thinking, reasoning_effort, tools,
                                           tool_choice, add_generation_prompt)
@@ -5772,11 +5791,13 @@ def _keepalive_choice(chat, visible):
     Emitting a `delta` on the completions stream produces a chunk with no `text`,
     which a strict client (the OpenAI SDK models `CompletionChoice.text` as
     required) rejects. Chat has a side channel for the diagnostic marker
-    (reasoning_content, off the visible answer); completions does not, so its
+    (reasoning_content, off the visible answer) plus an explicit
+    `x_colibri_keepalive` choice field; completions does not, so its
     keepalive stays an empty `text` — a "." there would land in the completion —
     and still resets the client's idle timer."""
     if chat:
         return {"index": 0, "delta": {"reasoning_content": "." if visible else ""},
+                "x_colibri_keepalive": True,
                 "logprobs": None, "finish_reason": None}
     return {"index": 0, "text": "", "logprobs": None, "finish_reason": None}
 
@@ -9642,6 +9663,12 @@ class APIHandler(BaseHTTPRequestHandler):
                                      preserve_thinking_default(body.get("messages"), enable_thinking))
         if not isinstance(preserve_thinking, bool):
             raise APIError(400, "`preserve_thinking` must be a boolean.", "preserve_thinking")
+        preserve_thinking_whitespace = body.get(
+            "preserve_thinking_whitespace",
+            os.environ.get("COLI_QWEN36_PRESERVE_THINKING_WHITESPACE") == "1")
+        if not isinstance(preserve_thinking_whitespace, bool):
+            raise APIError(400, "`preserve_thinking_whitespace` must be a boolean.",
+                           "preserve_thinking_whitespace")
         # The request's shape is checked before the image expanders and the renderer read it.
         # generation() validates `tools` too, but only after rendering, and a renderer handed a
         # `tools` of 5 or a `messages` of null raises TypeError, which do_POST answers with 500.
@@ -9664,7 +9691,8 @@ class APIHandler(BaseHTTPRequestHandler):
             raise APIError(400, "`messages` must be a non-empty array.", "messages")
         compact = compaction_requested(body)
         render = dict(enable_thinking=enable_thinking, reasoning_effort=reasoning_effort,
-                      tools=tools, tool_choice=tool_choice, preserve_thinking=preserve_thinking)
+                      tools=tools, tool_choice=tool_choice, preserve_thinking=preserve_thinking,
+                      preserve_thinking_whitespace=preserve_thinking_whitespace)
         lead, conversation = split_lead(messages)
         keys = compaction_keys(lead, conversation) if compact else None
         # a summary of the whole request would leave it without its question (a history cut
@@ -9682,7 +9710,8 @@ class APIHandler(BaseHTTPRequestHandler):
             prompt = render_chat_for_arch(expanded, enable_thinking, reasoning_effort,
                                           tools, tool_choice, audio_out=audio_clips,
                                           add_generation_prompt=add_generation_prompt,
-                                          preserve_thinking=preserve_thinking)
+                                          preserve_thinking=preserve_thinking,
+                                          preserve_thinking_whitespace=preserve_thinking_whitespace)
             exceeded = self._context_pressure(body, prompt) if compact and attempt == 0 else None
             if exceeded is None:
                 try:
@@ -9794,7 +9823,9 @@ class APIHandler(BaseHTTPRequestHandler):
                                         render["tool_choice"],
                                         audio_out=[] if ARCH == "inkling" else None,
                                         add_generation_prompt=True,
-                                        preserve_thinking=render["preserve_thinking"])
+                                        preserve_thinking=render["preserve_thinking"],
+                                        preserve_thinking_whitespace=render[
+                                            "preserve_thinking_whitespace"])
         # the conversation's own flags, so the prompt begins as the engine's state does,
         # with the reasoning block closed; a family whose block this cannot close (its
         # thinking switch is not a marker at the end) is asked with thinking off instead

@@ -5,9 +5,10 @@ streaming experts from NVMe. Measured on Ryzen 7 5800HS + RTX 3050 Laptop 4 GB:
 
 | | Start | Now (CachyOS) |
 |---|---:|---:|
-| Short prompt, 256 tokens out | 1.83 tok/s | 18.5 tok/s |
+| Short prompt, 256 tokens out (includes prefill) | 1.83 tok/s | 18.1 tok/s |
+| Decode after short / 5,338-token prompt | not recorded | ~20.0 / 16.8 tok/s |
 | TTFT, 32-token prompt | several s | ~1.4 s |
-| TTFT, 5,338-token prompt | 81.6 s | 16.5 s |
+| TTFT, 5,338-token prompt | 81.6 s | 16.7 s |
 
 What was optimized: parallel expert loaders, segmented-LRU cache with heat warm start, Vulkan
 dense chain + lm_head, packed `experts.q36x` store with unbuffered reads, lookahead, expert-major
@@ -17,6 +18,12 @@ Full history: [HANDOFF.md](HANDOFF.md) and [benchmark-results/OPTIMIZATION_REPOR
 
 **CachyOS: where we are, the plan, daily coding use and this round's pull-to-push steps:**
 [docs/CACHYOS-PERFORMANCE.md](docs/CACHYOS-PERFORMANCE.md).
+
+Round 4 found no reliable gain from MTP, alternative GEMV, extra lookahead or
+GPU decode experts on this laptop. MTP stays off. Round 5 adds controlled heat
+history, exact timing/token parity, decode-only profiling, persistent-server
+telemetry and opt-in fence-polling experiments. New speedups are not yet measured;
+30 tok/s remains a target, not a claimed result.
 
 ## Run on CachyOS (Arch, XFCE4)
 

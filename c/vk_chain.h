@@ -893,6 +893,9 @@ typedef struct {
     unsigned long long grp_wide;       /* of the grouped expert GEMMs, those at the wider item (qmatmul_grp*_bdcw.comp) */
 } VkcStats;
 void vkc_stats(VkcStats *st);
+/* Q36_PROFILE_DECODE=1/2 allocates timestamps at init but records only after this
+ * boundary. The caller must be between forwards. 0 means requested profiling failed. */
+int vkc_profile_decode_begin(void);
 /* COLI_VK_CHAIN_PROF=1: one stderr line of device time per kind of op */
 void vkc_prof_print(void);
 

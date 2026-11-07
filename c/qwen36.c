@@ -1193,6 +1193,8 @@ typedef struct {
     int *slot_by_expert;                  /* expert id -> resident slot, -1 if absent */
     int n, cap;
     int nprot;                            /* Q36_EVICT=slru: slots in the protected segment */
+    uint64_t hits, misses, decode_hits, decode_misses;
+    double load_s, decode_load_s;
 } LCache;
 
 /* CACHE_ROUTE telemetry (docs/CACHE_ROUTE.md): the lever changes which experts
@@ -1507,6 +1509,23 @@ static int slot_victim(const LCache *lc, int layer, int allow_pinned) {
     return dev >= 0 ? dev : lru >= 0 ? lru : prot;
 }
 
+/* Called with g_pilot_mx held. Publishers signal under the same mutex. */
+static int slot_wait_victim(const LCache *lc, int layer) {
+    int victim = slot_victim(lc, layer, 0);
+    if (victim < 0) victim = slot_victim(lc, layer, 1);
+    while (victim < 0) {
+        int loading = 0;
+        for (int i = 0; i < lc->n; i++) if (lc->slots[i].eid < 0) loading = 1;
+        if (!loading) {
+            fprintf(stderr, "qwen36: layer %d: all %d expert slots held, none loading\n", layer, lc->n);
+            exit(1);
+        }
+        pthread_cond_wait(&g_pub_cv, &g_pilot_mx);
+        victim = slot_victim(lc, layer, 1);
+    }
+    return victim;
+}
+
 static void ensure_pilot_worker_started(Model *m) {
     if (!pilot_m) {
         pilot_m = m;
@@ -1560,6 +1579,7 @@ static double rss_now_gb(void) {
 static int g_timers = -1;
 static double g_tm_dec[6], g_tm_pre[6];   /* 0=deltanet 1=attention 2=moe_total 3=shared 4=router 5=lm_head */
 static long g_tm_dec_tokens = 0, g_tm_pre_tokens = 0;
+static int g_tm_spec_rows;
 static double tm_now(void){ struct timespec ts; clock_gettime(CLOCK_MONOTONIC,&ts); return ts.tv_sec*1e3 + ts.tv_nsec/1e6; }
 static int tm_on(void){ if(g_timers<0){ const char *e=getenv("COLI_TIMERS"); g_timers = (e && *e=='1'); } return g_timers; }
 double g_qt_iss=0, g_qt_cpu=0, g_qt_tak=0;   /* QTIER-Phasen (Decode) */
@@ -1581,6 +1601,10 @@ static void tm_add(int S, int idx, double ms){
 }
 static void tm_report(void){
     if(!tm_on()) return;
+    if (g_tm_spec_rows) {
+        fprintf(stderr, "[timers] decode phases omitted: speculative multi-row verification; use [q36 bench] wall timing\n");
+        return;
+    }
     static const char *nm[6]={"deltanet","attention","moe_total","(shared)","(router)","lm_head"};
     fprintf(stderr,"[timers] decode: %ld tokens  (shared/router are subsets of moe_total)\n", g_tm_dec_tokens);
     double sum=0;
@@ -1590,14 +1614,14 @@ static void tm_report(void){
         if(i!=3&&i!=4) sum+=g_tm_dec[i];
     }
     fprintf(stderr,"[timers]   %-10s %9.1f ms  %8.2f ms/token\n","TOTAL",sum,g_tm_dec_tokens?sum/g_tm_dec_tokens:0.0);
-    if(g_tm_step>0)
+    if(g_tm_step>0 && g_tm_dec_tokens>0)
         fprintf(stderr,"[timers]   step() total: %.1f ms/token (outside the phases: %.1f)\n",
             g_tm_step/g_tm_dec_tokens,
             (g_tm_step-(g_tm_dec[0]+g_tm_dec[1]+g_tm_dec[2]+g_tm_dec[5]))/g_tm_dec_tokens);
-    if(g_dn_sub[0]+g_dn_sub[1]+g_dn_sub[2]+g_dn_sub[3]>0)
+    if(g_tm_dec_tokens>0 && g_dn_sub[0]+g_dn_sub[1]+g_dn_sub[2]+g_dn_sub[3]>0)
         fprintf(stderr,"[timers]   dn-sub: proj %.1f | conv %.1f | l2n+rec %.1f | norm+out %.1f ms/token\n",
             g_dn_sub[0]/g_tm_dec_tokens,g_dn_sub[1]/g_tm_dec_tokens,g_dn_sub[2]/g_tm_dec_tokens,g_dn_sub[3]/g_tm_dec_tokens);
-    if(g_xf_load+g_xf_run>0)
+    if(g_tm_dec_tokens>0 && g_xf_load+g_xf_run>0)
         fprintf(stderr,"[timers]   expert kernel: fetch %.2f | compute %.2f ms/token\n",
                 g_xf_load/g_tm_dec_tokens, g_xf_run/g_tm_dec_tokens);
     if(g_skip_tot>0)
@@ -1606,7 +1630,7 @@ static void tm_report(void){
     if(g_la_sent>0)
         fprintf(stderr,"[timers]   Q36_LOOKAHEAD: %llu expert reads issued ahead (%.1f a token)\n",
                 (unsigned long long)g_la_sent, g_tm_dec_tokens?(double)g_la_sent/g_tm_dec_tokens:0.0);
-    if(g_qt_iss+g_qt_cpu+g_qt_tak>0)
+    if(g_tm_dec_tokens>0 && g_qt_iss+g_qt_cpu+g_qt_tak>0)
         fprintf(stderr,"[timers]   qtier: issue %.2f | cpu-miss %.2f | take %.2f ms/token\n",
                 g_qt_iss/g_tm_dec_tokens, g_qt_cpu/g_tm_dec_tokens, g_qt_tak/g_tm_dec_tokens);
     fprintf(stderr,"[timers] prefill: %ld tokens  dn=%.0f attn=%.0f moe=%.0f(sh=%.0f rt=%.0f) head=%.0f ms\n",
@@ -4920,7 +4944,7 @@ static void expert_fetch(Model *m, int layer, int eid, Slot **out, int hold) {
     for (;;) {
         Slot *hit = slot_indexed(m, layer, eid);
         if (hit) {
-            m->hits++; hit->used = ++m->clock; *out = hit;
+            m->hits++; lc->hits++; hit->used = ++m->clock; *out = hit;
             if (q36_slru_on() && !hit->prot) q36_slru_promote(lc, hit);
             if (hold) slot_hold(hit);
             pthread_mutex_unlock(&g_pilot_mx); return;
@@ -4928,40 +4952,14 @@ static void expert_fetch(Model *m, int layer, int eid, Slot **out, int hold) {
         if (!m->loading || !m->loading[gidx]) break;
         pthread_cond_wait(&g_pub_cv, &g_pilot_mx);   /* another loader is reading this expert */
     }
-    m->miss++;
+    m->miss++; lc->misses++;
     Cfg *c = &m->c; Slot *s;
     if (!m->loading) m->loading = calloc((size_t)c->n_layers * c->n_experts, 1);
     if (lc->n < lc->cap) { s = &lc->slots[lc->n++]; slot_ensure_allocated(m, s); }
     else {
         /* LRU eviction: an unpinned slot first, else the oldest pinned one;
          * never one being loaded or computed from. */
-        int lru = slot_victim(lc, layer, 0);
-        if (lru < 0) lru = slot_victim(lc, layer, 1);
-        while (lru < 0) {
-            /* Every slot is held or being loaded. Only this thread holds (the
-             * PILOT worker never does) and a moe run holds fewer slots than
-             * cap, so with nothing loading a hold leaked: say so, don't hang. */
-            int loading = 0;
-            for (int i = 0; i < lc->n; i++) if (lc->slots[i].eid < 0) loading = 1;
-            if (!loading) { fprintf(stderr, "qwen36: layer %d: all %d expert slots held, none loading\n", layer, lc->n); exit(1); }
-            /* EVERY slot is in flight: each buffer is owned by an unlocked pread
-             * in the pilot worker (or a demand load) that will publish into it.
-             * The old last resort (lru=0) stole such a slot mid-load — two writers
-             * racing the same slab, then whichever published last decided the
-             * expert id the resident bytes answered to. Wait for a publish instead
-             * and rescan; in-flight always drains because a load either finishes
-             * or the process is already dead in the water.
-             *
-             * Taken verbatim from olmoe.c, which this cache derives from and
-             * where this exact fallback was deleted for exactly this reason.
-             * Reachable whenever cap is smaller than the number of candidates a
-             * layer has in flight — PILOT queues up to 128 per layer — i.e. on
-             * any small-RAM box, and it corrupts silently rather than crashing. */
-            pthread_mutex_unlock(&g_pilot_mx);
-            sleep_ms(1);
-            pthread_mutex_lock(&g_pilot_mx);
-            lru = slot_victim(lc, layer, 1);
-        }
+        int lru = slot_wait_victim(lc, layer);
         s = &lc->slots[lru]; s->pinned = 0; q36_slru_drop(lc, s);
         if (vkt_ram_first(layer, s->eid)) vkt_ram_gave();
     }
@@ -4973,6 +4971,7 @@ static void expert_fetch(Model *m, int layer, int eid, Slot **out, int hold) {
     double t_read = now_s() - t_read0;
     pthread_mutex_lock(&g_pilot_mx);
     m->t_disk += t_read;        /* sotto lock: qui arrivano anche i thread del PILOT */
+    lc->load_s += t_read;
     cache_publish(m, layer, s, eid); s->pinned = m->is_pinned[layer * c->n_experts + eid]; s->used = ++m->clock;
     if (m->loading) m->loading[gidx] = 0;
     if (hold) slot_hold(s);
@@ -5022,7 +5021,7 @@ static Slot *expert_try_hold(Model *m, int layer, int eid) {
     pthread_mutex_lock(&g_pilot_mx);
     Slot *hit = slot_indexed(m, layer, eid);
     if (hit) {
-        m->hits++; hit->used = ++m->clock;
+        m->hits++; m->cache[layer].hits++; hit->used = ++m->clock;
         if (q36_slru_on() && !hit->prot) q36_slru_promote(&m->cache[layer], hit);
         slot_hold(hit);
     }
@@ -9038,6 +9037,9 @@ static void q36_spec_report(const Q36Spec *sp, const char *scope) {
 }
 
 static Q36Spec g_q36_run_spec;   /* generate()'s, reported by main() */
+#ifdef COLI_VULKAN
+static VkcStats g_q36_decode_vk;
+#endif
 
 static void generate(Model *m, const int *prompt, int np, int n_new, int *out) {
     Cfg *c = &m->c;
@@ -9055,6 +9057,27 @@ static void generate(Model *m, const int *prompt, int np, int n_new, int *out) {
     m->kv_len = 0;
     for (int i = 0; i < np; i++) out[i] = prompt[i];
     float *logit = step(m, prompt, np, 0);
+    pthread_mutex_lock(&g_pilot_mx);
+    for (int i = 0; i < c->n_layers; i++) {
+        LCache *lc = &m->cache[i];
+        lc->decode_hits = lc->hits; lc->decode_misses = lc->misses;
+        lc->decode_load_s = lc->load_s;
+    }
+    pthread_mutex_unlock(&g_pilot_mx);
+#ifdef COLI_VULKAN
+    const char *prof = getenv("Q36_PROFILE_DECODE");
+    if (prof && (*prof == '1' || *prof == '2') && !g_vk_chain) {
+        fprintf(stderr, "[VK] requested decode profiling requires the Vulkan dense chain\n");
+        exit(1);
+    }
+    if (g_vk_chain) {
+        if (prof && (*prof == '1' || *prof == '2') && !vkc_profile_decode_begin()) {
+            fprintf(stderr, "[VK] requested decode profiling unavailable\n");
+            exit(1);
+        }
+        vkc_stats(&g_q36_decode_vk);
+    }
+#endif
     qt_stats_mark();   /* [qtier] stats also report the hit rate from here on */
     int len = np;
     Q36Spec *sp = &g_q36_run_spec;
@@ -9077,6 +9100,7 @@ static void generate(Model *m, const int *prompt, int np, int n_new, int *out) {
           if (tm_on()) g_tm_step += tm_now()-_s0; }
     }
     q36_spec_end(m, sp);
+    g_tm_spec_rows = sp->verifies > 0;
 }
 
 static int tf_nll(Model *m, const int *full, int nfull, int np, double *nll_out) {
@@ -11247,6 +11271,7 @@ int main(int argc, char **argv) {
         }
     }
     double t = now_s();
+    g_gen_t0 = t;
     if (is_ref) { g_q36_oracle = full; g_q36_oracle_n = nfull; }   /* COLI_LOOKUP_FORCE */
     generate(&m, prompt, np, n_new, out);
     double dt = now_s() - t;
@@ -11307,6 +11332,37 @@ int main(int argc, char **argv) {
            (unsigned long long)m.hits, (unsigned long long)m.miss);
     route_footer(stderr, &m);
     fprintf(stderr, "Speed: %.2f tok/s (%.1fs for %d tokens)\n", n_new/dt, dt, n_new);
+    if (getenv("Q36_BENCH_METRICS") && getenv("Q36_BENCH_METRICS")[0] == '1') {
+        uint64_t hash = UINT64_C(14695981039346656037);
+        for (int i = np; i < np + n_new; i++) {
+            uint32_t id = (uint32_t)out[i];
+            for (int j = 0; j < 4; j++) {
+                hash ^= (id >> (8 * j)) & 255u;
+                hash *= UINT64_C(1099511628211);
+            }
+        }
+        fprintf(stderr, "[q36 bench] generated=%d total_s=%.9f ttft_s=%.9f ids_fnv64=%016llx\n",
+                n_new, dt, g_ttft, (unsigned long long)hash);
+        fprintf(stderr, "[q36 bench] cache_slots_per_layer=%d\n", m.cache[0].cap);
+        pthread_mutex_lock(&g_pilot_mx);
+        for (int i = 0; i < m.c.n_layers; i++) {
+            LCache *lc = &m.cache[i];
+            fprintf(stderr, "[q36 decode cache] layer=%d slots=%d hits=%llu misses=%llu load_ms=%.6f\n",
+                    i, lc->cap, (unsigned long long)(lc->hits - lc->decode_hits),
+                    (unsigned long long)(lc->misses - lc->decode_misses),
+                    1000.0 * (lc->load_s - lc->decode_load_s));
+        }
+        pthread_mutex_unlock(&g_pilot_mx);
+#ifdef COLI_VULKAN
+        if (g_vk_chain) {
+            VkcStats st; vkc_stats(&st);
+            fprintf(stderr, "[q36 decode vk] frames=%llu waits=%llu wait_ms=%.6f bytes_up=%llu bytes_down=%llu\n",
+                    st.frames - g_q36_decode_vk.frames, st.waits - g_q36_decode_vk.waits,
+                    st.wait_ms - g_q36_decode_vk.wait_ms,
+                    st.bytes_up - g_q36_decode_vk.bytes_up, st.bytes_down - g_q36_decode_vk.bytes_down);
+        }
+#endif
+    }
 #ifdef COLI_CUDA
     q36cc_report(&m);
 #endif

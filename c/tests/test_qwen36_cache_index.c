@@ -66,6 +66,36 @@ static void check_victim(void) {
     free_cache(&m);
 }
 
+static void *publish_after_wait(void *arg) {
+    Model *m = arg;
+    sleep_ms(10);
+    pthread_mutex_lock(&g_pilot_mx);
+    pthread_cond_broadcast(&g_pub_cv);   /* a spurious notification is not a publication */
+    pthread_mutex_unlock(&g_pilot_mx);
+    sleep_ms(10);
+    pthread_mutex_lock(&g_pilot_mx);
+    cache_publish(m, 0, &m->cache[0].slots[0], 1);
+    pthread_cond_broadcast(&g_pub_cv);
+    pthread_mutex_unlock(&g_pilot_mx);
+    return NULL;
+}
+
+static void check_wait_for_publication(void) {
+    Model m; init_cache(&m, 2, 1); LCache *lc = &m.cache[0]; lc->n = 1;
+    lc->slots[0].eid = -1;
+    pthread_t publisher;
+    int created = pthread_create(&publisher, NULL, publish_after_wait, &m);
+    CHECK(created == 0, "publisher thread did not start");
+    if (!created) {
+        pthread_mutex_lock(&g_pilot_mx);
+        CHECK(slot_wait_victim(lc, 0) == 0, "published slot not returned");
+        CHECK(lc->slots[0].eid == 1, "spurious wakeup exposed an in-flight slot");
+        pthread_mutex_unlock(&g_pilot_mx);
+        pthread_join(publisher, NULL);
+    }
+    free_cache(&m);
+}
+
 int main(void) {
     Model m; init_cache(&m, 6, 2); LCache *lc = &m.cache[0]; lc->n = 2;
     cache_publish(&m, 0, &lc->slots[0], 1);
@@ -87,6 +117,7 @@ int main(void) {
 
     free_cache(&m);
     check_victim();
+    check_wait_for_publication();
     check_lookup_scaling(44);
     check_lookup_scaling(219);
     if (failures) { fprintf(stderr,"qwen36 cache index: %d failure(s)\n", failures); return 1; }

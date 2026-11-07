@@ -920,13 +920,15 @@ class TemplateTest(unittest.TestCase):
                 generation_options({"stop": value}, 8)
 
     def test_keepalive_choice_matches_the_endpoint_chunk_shape(self):
-        # Chat chunks carry a `delta`; the diagnostic marker rides reasoning_content,
-        # off the visible answer.
+        # Chat chunks carry a `delta`; keepalives are explicitly marked so a real
+        # generated "." in reasoning_content remains distinguishable.
         chat = _keepalive_choice(True, False)
         self.assertEqual(chat["delta"], {"reasoning_content": ""})
+        self.assertIs(chat["x_colibri_keepalive"], True)
         self.assertNotIn("text", chat)
-        self.assertEqual(_keepalive_choice(True, True)["delta"],
-                         {"reasoning_content": "."})
+        visible_chat = _keepalive_choice(True, True)
+        self.assertEqual(visible_chat["delta"], {"reasoning_content": "."})
+        self.assertIs(visible_chat["x_colibri_keepalive"], True)
         # Legacy /v1/completions chunks carry `text`, never `delta`, or a strict
         # client (OpenAI SDK: CompletionChoice.text is required) rejects the ping.
         # No side channel, so the marker never appears: a "." would land in the text.
@@ -934,6 +936,7 @@ class TemplateTest(unittest.TestCase):
             comp = _keepalive_choice(False, visible)
             self.assertEqual(comp["text"], "")
             self.assertNotIn("delta", comp)
+            self.assertNotIn("x_colibri_keepalive", comp)
 
     def test_glm_chat_defaults_role_stops_without_changing_other_policies(self):
         with patch("openai_server.ARCH", "glm"):
@@ -3864,6 +3867,42 @@ class HTTPTest(unittest.TestCase):
             self.addCleanup(caught.exception.close)
             self.assertEqual(caught.exception.code, 400)
 
+    def test_qwen36_thinking_whitespace_opt_in_can_be_set_per_request_or_environment(self):
+        reasoning = "  Here's the reasoning.  "
+        history = [{"role": "user", "content": "Capital of France?"},
+                   {"role": "assistant", "content": "Paris.",
+                    "reasoning_content": reasoning},
+                   {"role": "user", "content": "And of Italy?"}]
+        expected = f"<think>\n{reasoning}</think>\n\nParis."
+        with patch("openai_server.ARCH", "qwen36"):
+            with self.request("/v1/chat/completions", {
+                    "model": "test-model", "messages": history, "enable_thinking": True,
+                    "preserve_thinking": True, "preserve_thinking_whitespace": True}) as response:
+                self.assertEqual(response.status, 200)
+            self.assertIn(expected, self.engine.calls[-1][0])
+
+            with patch.dict(os.environ, {"COLI_QWEN36_PRESERVE_THINKING_WHITESPACE": "1"}):
+                with self.request("/v1/chat/completions", {
+                        "model": "test-model", "messages": history, "enable_thinking": True,
+                        "preserve_thinking": True}) as response:
+                    self.assertEqual(response.status, 200)
+                self.assertIn(expected, self.engine.calls[-1][0])
+
+                with self.request("/v1/chat/completions", {
+                        "model": "test-model", "messages": history, "enable_thinking": True,
+                        "preserve_thinking": True, "preserve_thinking_whitespace": False
+                }) as response:
+                    self.assertEqual(response.status, 200)
+                self.assertIn("<think>\nHere's the reasoning.\n</think>\n\nParis.",
+                              self.engine.calls[-1][0])
+
+            with self.assertRaises(HTTPError) as caught:
+                self.request("/v1/chat/completions", {
+                    "model": "test-model", "messages": history,
+                    "preserve_thinking_whitespace": "yes"})
+            self.addCleanup(caught.exception.close)
+            self.assertEqual(caught.exception.code, 400)
+
     def test_qwen38_template_defaults_to_xhigh_thinking_on_the_qwen36_engine(self):
         """What the flavor changes over the wire: with no thinking field, a Qwen3.8
         template reasons at xhigh by default, as the qwen38 family does."""
@@ -5128,6 +5167,20 @@ class ThinkingSplitUnitTest(unittest.TestCase):
         s.feed("abc</thi"); s.feed("nk>def"); s.finish()
         self.assertEqual(("".join(thinking), "".join(answer)), ("abc", "def"))
 
+    def test_leading_reasoning_whitespace_survives_completed_and_truncated_streams(self):
+        thinking, answer = [], []
+        complete = ThinkingStreamSplit(thinking.append, answer.append)
+        complete.feed("  reason</think>\n\nanswer")
+        complete.finish()
+        self.assertEqual(("".join(thinking), "".join(answer)),
+                         ("  reason", "\n\nanswer"))
+
+        thinking = []
+        truncated = ThinkingStreamSplit(thinking.append, lambda _text: None)
+        truncated.feed("  still thinking  ")
+        truncated.finish()
+        self.assertEqual("  still thinking  ", "".join(thinking))
+
     def test_open_tag_split_and_stray_open_marker(self):
         thinking, answer = [], []
         s = ThinkingStreamSplit(thinking.append, answer.append)
@@ -5263,6 +5316,19 @@ class GlmReasoningStreamTest(unittest.TestCase):
         self.assertEqual(content, "The answer is 42")
         self.assertNotIn("<think>", raw)
         self.assertNotIn("</think>", raw)
+
+    def test_generated_period_reasoning_has_no_keepalive_marker(self):
+        base = self._server([".", "</think>", "answer"])
+        raw = self._post(base, {"model": "test-model", "stream": True, "enable_thinking": True,
+                                "messages": [{"role": "user", "content": "x"}]})
+        choices = [choice
+                   for line in raw.splitlines() if line.startswith("data: ")
+                   and line != "data: [DONE]"
+                   for choice in json.loads(line[6:])["choices"]]
+        period = [choice for choice in choices
+                  if (choice.get("delta") or {}).get("reasoning_content") == "."]
+        self.assertEqual(len(period), 1)
+        self.assertNotIn("x_colibri_keepalive", period[0])
 
     def test_streaming_close_tag_split_across_chunks(self):
         base = self._server(["reason</thi", "nk>ans", "wer"])

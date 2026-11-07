@@ -174,7 +174,7 @@ typedef struct {
     /* hazard tracking since the last barrier */
     VkBuffer wr[VKC_TRACK], rd[VKC_TRACK]; int nwr, nrd;
     VkcStats st;
-    int prof, kind; float ts_period; uint32_t ts_mask;
+    int prof, prof_decode, kind; float ts_period; uint32_t ts_mask;
     double prof_ms[PK_N]; unsigned long long prof_n[PK_N];
     /* COLI_VK_CHAIN_PROF=2: the matmuls' time by (fmt, rows of x, O, I), the slots' keys */
     int prof_shapes; uint64_t prof_key[64]; double prof_sh_ms[64]; unsigned long long prof_sh_n[64];
@@ -706,6 +706,8 @@ int vkc_init(void) {
     }
     {
         const char *e = getenv("COLI_VK_CHAIN_PROF");
+        const char *decode = getenv("Q36_PROFILE_DECODE");
+        if (decode && (*decode == '1' || *decode == '2')) e = decode;
         uint32_t nqf = 0; vkGetPhysicalDeviceQueueFamilyProperties((VkPhysicalDevice)KC.core.phys, &nqf, NULL);
         VkQueueFamilyProperties qf[16]; if (nqf > 16) nqf = 16;
         vkGetPhysicalDeviceQueueFamilyProperties((VkPhysicalDevice)KC.core.phys, &nqf, qf);
@@ -718,6 +720,10 @@ int vkc_init(void) {
                 VkQueryPoolCreateInfo qi = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO,
                     .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = VKC_PROF_Q};
                 if (vkCreateQueryPool(KC.dev, &qi, NULL, &KC.fr[i].qp) != VK_SUCCESS) KC.prof = 0;
+            }
+            if (decode && (*decode == '1' || *decode == '2')) {
+                KC.prof_decode = KC.prof;
+                KC.prof = 0;
             }
         }
     }
@@ -3269,6 +3275,12 @@ int vkc_enc_rel(VkcBuf *x, VkcBuf *pt, VkcBuf *y, const VkcEncRel *p) {
 }
 
 void vkc_stats(VkcStats *st) { *st = KC.st; }
+int vkc_profile_decode_begin(void) {
+    if (!KC.prof_decode || !vkc_finish()) return 0;
+    KC.prof = KC.prof_decode;
+    fprintf(stderr, "[VK] chain profile scope: decode only (after prefill)\n");
+    return 1;
+}
 
 /* ---- big prefill chunks ------------------------------------------------------------
  * The rows of a prompt chunk (vk_chain.h, vkc_chunk_rows). The free device memory is

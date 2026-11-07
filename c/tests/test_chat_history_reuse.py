@@ -26,9 +26,10 @@ REASONING = "The user wants the idea and the collision handling."
 FOLLOW_UP = "Now an example in C."
 
 
-def qwen36(messages, thinking):
+def qwen36(messages, thinking, preserve_whitespace=False):
     return o.render_chat_qwen(messages, thinking, None, None, None, True,
-                              o.preserve_thinking_default(messages, thinking))
+                              o.preserve_thinking_default(messages, thinking),
+                              preserve_thinking_whitespace=preserve_whitespace)
 
 
 # family: (renderer, the turn the model generates with thinking off, with thinking on)
@@ -94,6 +95,46 @@ class NextTurnExtendsTheState(unittest.TestCase):
         self.assertIn(f"</think>{ANSWER}", o.render_chat_dsv41(history, True, None, None, None, True))
         self.assertNotIn("<|content_thinking|>",
                          o.render_chat_inkling(history, True, None, None, None, add_generation_prompt=True))
+
+    def test_qwen36_opt_in_reuses_completed_and_truncated_whitespace_exactly(self):
+        reasoning = "  Here's the reasoning, with its original spacing. \n"
+        first = qwen36([{"role": "user", "content": QUESTION}], True)
+        completed = [{"role": "user", "content": QUESTION},
+                     {"role": "assistant", "content": ANSWER,
+                      "reasoning_content": reasoning},
+                     {"role": "user", "content": FOLLOW_UP}]
+        generated = reasoning + f"</think>\n\n{ANSWER}"
+
+        # Default official-template rendering remains normalized; the opt-in preserves
+        # the exact reasoning text held by the completed model turn.
+        self.assertFalse(qwen36(completed, True).startswith(first + generated))
+        self.assertTrue(qwen36(completed, True, preserve_whitespace=True).startswith(
+            first + generated))
+
+        # A request truncated inside its open think block must likewise continue at the
+        # exact held bytes, including leading and trailing spaces.
+        partial = [{"role": "user", "content": QUESTION},
+                   {"role": "assistant", "content": "",
+                    "reasoning_content": "  still thinking  "}]
+        continuation = o.render_chat_qwen(
+            partial, True, add_generation_prompt=o.CONTINUE_IN_THINK,
+            preserve_thinking_whitespace=True)
+        self.assertTrue(continuation.endswith("<|im_start|>assistant\n<think>\n"
+                                              "  still thinking  "))
+
+    def test_qwen36_opt_in_reconstructs_newline_terminated_reasoning(self):
+        question = {"role": "user", "content": "Why?"}
+        follow = {"role": "user", "content": "Continue."}
+        for reasoning in ("  first line\n", "  first line\n\n"):
+            with self.subTest(reasoning=reasoning):
+                first = o.render_chat_qwen([question], enable_thinking=True)
+                history = [question, {"role": "assistant", "content": "Answer.",
+                                      "reasoning_content": reasoning}, follow]
+                expected = first + reasoning + "</think>\n\nAnswer."
+                prompt = o.render_chat_qwen(
+                    history, enable_thinking=True, preserve_thinking=True,
+                    preserve_thinking_whitespace=True)
+                self.assertTrue(prompt.startswith(expected), repr(prompt[:len(expected)]))
 
     def test_inkling_renders_reasoning_as_its_template_does(self):
         """chat_template.jinja: the reasoning is a model message of its own, before the text."""

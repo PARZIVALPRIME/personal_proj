@@ -24,6 +24,15 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 src=$(cd "$here/.." && pwd)
 
+if [ "${Q36_REFERENCE:-0}" = 1 ]; then
+    # A controlled reference ignores inherited experimental settings and saved winners.
+    for key in $(compgen -v); do
+        case "$key" in Q36_*|QWEN_*|COLI_*|OMP_*|GOMP_*|KMP_*) unset "$key" ;; esac
+    done
+    unset GPU RAM_GB PILOT HOT PROMPT N_NEW LOSSY
+    export Q36_CONF=none
+fi
+
 base_snap=${SNAP:-$HOME/colibri-models/qwen36-35b}
 case "${1:-serve}" in
     mtp-setup)
@@ -79,6 +88,7 @@ export Q36_EVICT=slru Q36_SLRU_PROT=0.8 Q36_HEAT=${Q36_HEAT:-1}
 # 0.92 left 81-129 MiB free and swapped hundreds of thousands of pages on long prompts;
 # 0.80 kept about 1.4 GiB free with a lower long TTFT. RAM_GB, if set, overrides this.
 export Q36_RAM_FRAC=${Q36_RAM_FRAC:-0.80}
+export Q36_MTP=${Q36_MTP:-0}
 export Q36_LOOKAHEAD=${Q36_LOOKAHEAD:-1}
 export Q36_XPACK=${Q36_XPACK:-1}
 export Q36_MAXT=${Q36_MAXT:-16384}

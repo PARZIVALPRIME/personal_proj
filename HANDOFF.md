@@ -2,6 +2,41 @@
 
 ## CURRENT STATE (read this first): moved from Windows to CachyOS Linux
 
+### November 7: round 4 analyzed; round 5 implementation awaiting laptop measurements
+
+Pulled `8709f68`. Final medians: short decode 20.01 tok/s (TTFT 1.454 s);
+5,338-token prompt decode 16.82 tok/s (TTFT 16.743 s). No round-4 lever qualified.
+MTP really ran on the GPU but reduced short decode to 11.5-14.1 tok/s.
+The previous 22-25 tok/s forecast was not achieved and is not the current expectation.
+Coding-agent follow-ups reused ~99% of history and started in 1.1-1.3 s;
+actual coding generation was 12-13 tok/s with a smaller effective cache.
+Thinking runs diverged on resent reasoning whitespace.
+
+Implemented for round 5:
+- Reference environment reset, with six threads/0.80 RAM/MTP off retained.
+- Cache publication condition-variable waiting instead of millisecond polling.
+- Exact direct-run timing and token fingerprints; per-layer decode cache counters;
+  decode-only Vulkan frames/waits/transfers and opt-in timestamp scope.
+- Identical private heat seeds and alternating profile runs.
+- Opt-in spin0/spin200/spin2000/spin2000-io4 profiles; no automatic default change.
+- Complete-workload, memory, timing and token-parity gates before winner saving;
+  effective settings replace stale config rather than merging it.
+- Persistent serving comparisons with telemetry, strict stream/usage validation,
+  partial-result retention, token-limit failure and optional all-follow-up reuse gate.
+- Opt-in Qwen36 whitespace-preserving history roundtrip, exercised by agent --think.
+
+No laptop throughput improvement has been established for this implementation.
+Development validation: 85 Q36-tool tests passed; 6 history tests passed with one
+optional dependency skip; 13 focused gateway/splitter/keepalive tests passed.
+Python and all 15 runbook Bash blocks passed syntax checks. The modified C engine,
+Vulkan backend and cache regression compile-check with Linux/Vulkan/OpenMP/AVX2
+headers. This Windows checkout cannot execute the native Linux/Vulkan inference
+or the C concurrency regression: rebuild and run those on CachyOS in step 3.
+GPU kernel rewrites, unequal layer cache allocations and new I/O backends remain
+evidence-gated rather than speculative defaults. Current steps are in
+[docs/CACHYOS-PERFORMANCE.md](docs/CACHYOS-PERFORMANCE.md).
+The sections below are historical, including superseded forecasts and winner rules.
+
 ### November 7 (later): round 4 = optimize decode toward 30 tok/s, then coding tests
 
 Decode-only speed (new `decode_tps` metric: tokens after the first / time after TTFT),
