@@ -134,3 +134,7 @@ bash benchmark-results/turbo-qwen36.sh sweep --profiles baseline io4 --repeats 3
 ```
 
 Full runbook: `docs/CACHYOS-PERFORMANCE.md`. Detailed history: `HANDOFF.md`.
+
+## Engineering roadmap
+
+Sweeps are exhausted. The implementation plan (persistent prefix cache, decode-chain trace, speculative expert execution, GPU-pinned hot experts, lookup decoding for code, gpt-oss-120b later) is in [docs/plans/q36-engineering-roadmap.md](docs/plans/q36-engineering-roadmap.md).
