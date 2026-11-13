@@ -1,0 +1,365 @@
+{
+  "label": "long-baseline-r5",
+  "command": [
+    "/home/parzivalprime/personal_proj/c/qwen36",
+    "0",
+    "4",
+    "/home/parzivalprime/personal_proj/benchmark-results/prompt-long.txt"
+  ],
+  "environment": {
+    "COLI_CUDA": "0",
+    "COLI_ENGINE": "/home/parzivalprime/personal_proj/c/qwen36",
+    "COLI_LOOKUP": "1",
+    "COLI_TIMERS": "1",
+    "COLI_VK_SHADERS": "/home/parzivalprime/personal_proj/c/shaders",
+    "COLI_VK_TIER": "1",
+    "COLI_VK_TIER_EXCLUSIVE": "0",
+    "COLI_VK_TIER_HOST": "0",
+    "COLI_VK_TIER_RESERVE_GB": "0.5",
+    "COLI_VULKAN": "1",
+    "N_NEW": "48",
+    "OMP_NUM_THREADS": "6",
+    "PILOT": "0",
+    "Q36_BENCH_METRICS": "1",
+    "Q36_EVICT": "slru",
+    "Q36_HEAT": "1",
+    "Q36_HEAT_WAIT": "1",
+    "Q36_IO_THREADS": "8",
+    "Q36_LOOKAHEAD": "1",
+    "Q36_MAXT": "16384",
+    "Q36_MTP": "0",
+    "Q36_RAM_FRAC": "0.80",
+    "Q36_SLRU_PROT": "0.8",
+    "Q36_VK_TIER_MIN_ROWS": "64",
+    "Q36_XPACK": "1",
+    "SNAP": "/home/parzivalprime/colibri-models/qwen36-35b"
+  },
+  "prompt_path": "/home/parzivalprime/personal_proj/benchmark-results/prompt-long.txt",
+  "requested_output_tokens": 48,
+  "engine_sha256": "8d742cb73f82f79de16ee09bd954ad53cd3606bd574247c245d218d45e5188f2",
+  "prompt_sha256": "cd410791da90635a1c4d37c0973c630f08635f2297439df91cc4f237ff99bebc",
+  "started_utc": "2026-11-13T17:53:33.239672+00:00",
+  "starting_mem_available_kib": 14580464,
+  "decode_timing": "engine_monotonic",
+  "generated_ids_fnv64": "b7a1cdc0ddd2e137",
+  "vk_profile": [],
+  "decode_cache": [
+    {
+      "layer": 0,
+      "slots": 163,
+      "hits": 293,
+      "misses": 91,
+      "load_ms": 193.935723
+    },
+    {
+      "layer": 1,
+      "slots": 163,
+      "hits": 302,
+      "misses": 81,
+      "load_ms": 204.912771
+    },
+    {
+      "layer": 2,
+      "slots": 163,
+      "hits": 300,
+      "misses": 80,
+      "load_ms": 201.599664
+    },
+    {
+      "layer": 3,
+      "slots": 163,
+      "hits": 320,
+      "misses": 57,
+      "load_ms": 122.974043
+    },
+    {
+      "layer": 4,
+      "slots": 163,
+      "hits": 329,
+      "misses": 47,
+      "load_ms": 107.709022
+    },
+    {
+      "layer": 5,
+      "slots": 163,
+      "hits": 337,
+      "misses": 38,
+      "load_ms": 83.940325
+    },
+    {
+      "layer": 6,
+      "slots": 163,
+      "hits": 336,
+      "misses": 40,
+      "load_ms": 82.774081
+    },
+    {
+      "layer": 7,
+      "slots": 163,
+      "hits": 342,
+      "misses": 33,
+      "load_ms": 62.366555
+    },
+    {
+      "layer": 8,
+      "slots": 163,
+      "hits": 349,
+      "misses": 24,
+      "load_ms": 47.870192
+    },
+    {
+      "layer": 9,
+      "slots": 163,
+      "hits": 348,
+      "misses": 29,
+      "load_ms": 58.1784
+    },
+    {
+      "layer": 10,
+      "slots": 163,
+      "hits": 351,
+      "misses": 29,
+      "load_ms": 53.146439
+    },
+    {
+      "layer": 11,
+      "slots": 163,
+      "hits": 345,
+      "misses": 34,
+      "load_ms": 60.406244
+    },
+    {
+      "layer": 12,
+      "slots": 163,
+      "hits": 340,
+      "misses": 37,
+      "load_ms": 77.860853
+    },
+    {
+      "layer": 13,
+      "slots": 163,
+      "hits": 351,
+      "misses": 28,
+      "load_ms": 59.697516
+    },
+    {
+      "layer": 14,
+      "slots": 163,
+      "hits": 355,
+      "misses": 23,
+      "load_ms": 45.693377
+    },
+    {
+      "layer": 15,
+      "slots": 163,
+      "hits": 346,
+      "misses": 32,
+      "load_ms": 61.16466
+    },
+    {
+      "layer": 16,
+      "slots": 163,
+      "hits": 353,
+      "misses": 25,
+      "load_ms": 48.525739
+    },
+    {
+      "layer": 17,
+      "slots": 163,
+      "hits": 342,
+      "misses": 33,
+      "load_ms": 65.19211
+    },
+    {
+      "layer": 18,
+      "slots": 163,
+      "hits": 348,
+      "misses": 31,
+      "load_ms": 54.483212
+    },
+    {
+      "layer": 19,
+      "slots": 163,
+      "hits": 348,
+      "misses": 29,
+      "load_ms": 62.288076
+    },
+    {
+      "layer": 20,
+      "slots": 163,
+      "hits": 350,
+      "misses": 26,
+      "load_ms": 54.249607
+    },
+    {
+      "layer": 21,
+      "slots": 163,
+      "hits": 347,
+      "misses": 31,
+      "load_ms": 71.680823
+    },
+    {
+      "layer": 22,
+      "slots": 163,
+      "hits": 344,
+      "misses": 36,
+      "load_ms": 68.227142
+    },
+    {
+      "layer": 23,
+      "slots": 163,
+      "hits": 355,
+      "misses": 29,
+      "load_ms": 53.359934
+    },
+    {
+      "layer": 24,
+      "slots": 163,
+      "hits": 349,
+      "misses": 31,
+      "load_ms": 60.850364
+    },
+    {
+      "layer": 25,
+      "slots": 163,
+      "hits": 359,
+      "misses": 25,
+      "load_ms": 46.431037
+    },
+    {
+      "layer": 26,
+      "slots": 163,
+      "hits": 360,
+      "misses": 21,
+      "load_ms": 51.375701
+    },
+    {
+      "layer": 27,
+      "slots": 163,
+      "hits": 354,
+      "misses": 28,
+      "load_ms": 55.663626
+    },
+    {
+      "layer": 28,
+      "slots": 163,
+      "hits": 349,
+      "misses": 32,
+      "load_ms": 61.977666
+    },
+    {
+      "layer": 29,
+      "slots": 163,
+      "hits": 355,
+      "misses": 24,
+      "load_ms": 40.704484
+    },
+    {
+      "layer": 30,
+      "slots": 163,
+      "hits": 358,
+      "misses": 23,
+      "load_ms": 38.350979
+    },
+    {
+      "layer": 31,
+      "slots": 163,
+      "hits": 342,
+      "misses": 35,
+      "load_ms": 76.26932
+    },
+    {
+      "layer": 32,
+      "slots": 163,
+      "hits": 335,
+      "misses": 44,
+      "load_ms": 90.920037
+    },
+    {
+      "layer": 33,
+      "slots": 163,
+      "hits": 354,
+      "misses": 25,
+      "load_ms": 45.40512
+    },
+    {
+      "layer": 34,
+      "slots": 163,
+      "hits": 350,
+      "misses": 31,
+      "load_ms": 64.857298
+    },
+    {
+      "layer": 35,
+      "slots": 163,
+      "hits": 352,
+      "misses": 28,
+      "load_ms": 53.690441
+    },
+    {
+      "layer": 36,
+      "slots": 163,
+      "hits": 342,
+      "misses": 33,
+      "load_ms": 73.957778
+    },
+    {
+      "layer": 37,
+      "slots": 163,
+      "hits": 338,
+      "misses": 39,
+      "load_ms": 88.785062
+    },
+    {
+      "layer": 38,
+      "slots": 163,
+      "hits": 347,
+      "misses": 30,
+      "load_ms": 60.589627
+    },
+    {
+      "layer": 39,
+      "slots": 163,
+      "hits": 334,
+      "misses": 45,
+      "load_ms": 95.911233
+    }
+  ],
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_s": 36.17197637299978,
+  "metrics": {
+    "prompt_tokens": 5338.0,
+    "vk_forwards": 47.0,
+    "vk_wait_ms": 6568.6,
+    "vk_host_experts_ms": 12663.5,
+    "ttft_s": 16.825033932,
+    "reported_speed_tps": 2.31,
+    "cache_hit_pct": 77.4,
+    "peak_rss_gb": 13.2,
+    "tokens_per_forward": 1.02,
+    "cache_slots_per_layer": 163.0,
+    "decode_vk_wait_ms": 1319.197925,
+    "decode_vk_frames": 3787.0,
+    "decode_vk_bytes_up": 393216.0,
+    "decode_vk_bytes_down": 0.0,
+    "decode_tps": 11.944210695041074,
+    "generated_tokens": 48
+  },
+  "status": "ok",
+  "gpu_monitor": {
+    "stopped_by_runner": true
+  },
+  "system_memory": {
+    "min_available_kib": 1548956,
+    "pswpin_delta": 59,
+    "pswpout_delta": 1,
+    "pgmajfault_delta": 109
+  },
+  "warnings": [
+    "System swap activity occurred; counters are system-wide, not engine-only."
+  ],
+  "profile": "baseline",
+  "workload": "long",
+  "warmup": false
+}
