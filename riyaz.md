@@ -89,6 +89,41 @@ Confirmation runs show occasional slow outliers (minimum decode 4-7 tok/s) while
 4. Run complete coding tasks to evaluate output quality and agent throughput.
 5. Re-run the native Linux/Vulkan C regression and rebuild (`make -C c qwen36 VK=1 -j"$(nproc)"`) after any engine change.
 
+## Round 6 plan: squeeze CachyOS (system level, opt-in, reversible)
+
+Insight: decode moves ~0.57 GB of experts/token, i.e. ~11 GB/s of ~50 GB/s DDR4 bandwidth. We are **latency-bound** (40 serial
+GPU<->CPU hops, ~33 ms/token outside expert timers), not bandwidth-bound. So the levers are wake-up latency and memory stability:
+
+| Lever | Why it should help | How |
+|---|---|---|
+| CPU governor/EPP `performance`, boost on | cores wake at full clock after each GPU wait | `cachy-tune.sh apply` |
+| PM QoS `/dev/cpu_dma_latency=0` | no deep C-state exit latency while waiting on GPU/loaders | `cachy-tune.sh apply` |
+| NVIDIA persistence + optional clock lock | GPU idles between short submissions; low P-state ramp costs ms | `GPU_LOCK=1 cachy-tune.sh apply` |
+| `vm.swappiness=20`, `vfs_cache_pressure=50`, no proactive compaction | CachyOS zram favours swapping; swapping expert-cache pages caused the 4-7 tok/s outliers | `cachy-tune.sh apply` |
+| THP `always` for the expert cache | fewer TLB misses on random expert reads | `THP=always cachy-tune.sh apply` |
+| NVMe scheduler `none` | lower latency on 1.77 MB miss reads | `cachy-tune.sh apply` |
+| OMP `bind` profile (cores/close) | keep 6 threads on distinct physical cores | `sweep --profiles baseline bind` |
+| sched-ext (`scx_lavd`/`scx_bore`) | latency-oriented scheduling on a hybrid desktop load | CachyOS kernel, test manually |
+
+Longer-term engineering ideas (not yet implemented): fuse more layers per Vulkan submission, predict next-layer experts from the
+current router to prefetch earlier, pin the hottest experts in VRAM for decode, persist the prompt KV state to NVMe so a coding
+agent never re-reads its 5k-token system prompt, and later a gpt-oss-120b run reusing the same expert-streaming engine.
+
+Run order on the laptop (all steps in `docs/CACHYOS-PERFORMANCE.md` still apply):
+
+```bash
+cd ~/personal_proj && git pull --ff-only
+sudo bash benchmark-results/cachy-tune.sh status          # note the "before" values
+export SNAP="$HOME/colibri-models/qwen36-35b"
+bash benchmark-results/turbo-qwen36.sh sweep --profiles baseline bind --repeats 5     # control, untuned system
+sudo bash benchmark-results/cachy-tune.sh apply           # try THP=always / GPU_LOCK=1 in later rounds
+bash benchmark-results/turbo-qwen36.sh sweep --profiles baseline bind --repeats 5     # same sweep, tuned system
+sudo bash benchmark-results/cachy-tune.sh revert          # when done (a reboot also reverts)
+git add -f benchmark-results/linux-memory-*/ && git commit -m "Round 6: system tuning results" && git push origin main
+```
+
+A change is adopted only if it beats the control by >=3% decode with no new failures or memory warnings.
+
 ## How to reproduce
 
 ```bash

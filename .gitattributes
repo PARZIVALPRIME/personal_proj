@@ -7,3 +7,4 @@ c/tools/q36_agent_bench.py text eol=lf
 c/tests/test_q36_agent_bench.py text eol=lf
 c/tools/q36_mtp_setup.py text eol=lf
 c/tests/test_q36_mtp_setup.py text eol=lf
+benchmark-results/cachy-tune.sh text eol=lf
