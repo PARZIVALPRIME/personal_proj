@@ -8589,5 +8589,52 @@ class ServedModalityTest(unittest.TestCase):
             self.assertEqual(len(engine.calls), 1)
 
 
+class WarmPrefixTest(unittest.TestCase):
+    class Fake:
+        def __init__(self, fail=False):
+            self.calls = []
+            self.fail = fail
+
+        def generate(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            if self.fail:
+                raise RuntimeError("boom")
+
+    def make(self, engine):
+        import collections
+        server = APIServer.__new__(APIServer)
+        server.engine = engine
+        server._warmed = collections.OrderedDict()
+        server._warm_lock = threading.Lock()
+        return server
+
+    PROMPT = "<|im_start|>system\n" + "x" * 4000 + "<|im_end|>\n<|im_start|>user\nhi<|im_end|>\n"
+
+    def run_warm(self, server, prompt, env="1", arch="qwen36"):
+        with patch.dict(os.environ, {"COLI_PREFIX_WARM": env}), patch.object(openai_server, "ARCH", arch):
+            return server.warm_prefix(prompt)
+
+    def test_pins_once_per_prefix(self):
+        engine = self.Fake()
+        server = self.make(engine)
+        self.assertTrue(self.run_warm(server, self.PROMPT))
+        self.assertFalse(self.run_warm(server, self.PROMPT.replace("hi", "other")))
+        self.assertEqual(len(engine.calls), 1)
+        self.assertTrue(engine.calls[0][1]["pin"])
+        self.assertNotIn("<|im_start|>user", engine.calls[0][0][0])
+
+    def test_off_short_or_other_arch(self):
+        engine = self.Fake()
+        server = self.make(engine)
+        self.assertFalse(self.run_warm(server, self.PROMPT, env="0"))
+        self.assertFalse(self.run_warm(server, self.PROMPT, arch="deepseek"))
+        self.assertFalse(self.run_warm(server, "<|im_start|>system\nshort<|im_end|>\n<|im_start|>user\nhi"))
+        self.assertEqual(engine.calls, [])
+
+    def test_failure_is_swallowed(self):
+        server = self.make(self.Fake(fail=True))
+        self.assertFalse(self.run_warm(server, self.PROMPT))
+
+
 if __name__ == "__main__":
     unittest.main()

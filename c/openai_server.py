@@ -7758,6 +7758,10 @@ def _positive_env(name, default):
     return value if value > 0 else default
 
 
+def _env_on(name):
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes", "on")
+
+
 class APIServer(ThreadingHTTPServer):
     daemon_threads = True
 
@@ -7818,6 +7822,8 @@ class APIServer(ThreadingHTTPServer):
         # worth a photo, one seen once is probably a feed (systemone's pin rule).
         self._states_seen = collections.OrderedDict()
         self._states_lock = threading.Lock()
+        self._warmed = collections.OrderedDict()   # system prefixes photographed (warm_prefix)
+        self._warm_lock = threading.Lock()
         # slot -> (fixed prefix, its tokens) photographed by /v1/systemone
         self.pinned_prefixes = {}
         self._conn_lock = threading.Lock()
@@ -7898,9 +7904,51 @@ class APIServer(ThreadingHTTPServer):
             modalities.append("image")
         return modalities
 
+    def warm_prefix(self, prompt, cache_slot=0, cancelled=None):
+        """COLI_PREFIX_WARM=1 (qwen36): photograph the stable system prefix of a chat prompt.
+
+        The engine resumes a prompt from its own last state or from a pinned photo, and only
+        when the prompt extends it. An agent starts every session with the same long system
+        prompt and tool schema, so a new session found nothing to extend and prefilled that
+        prefix again (~17 s at 5k tokens here). The first prompt with a new prefix is
+        therefore preceded by a one-token pinned request of the prefix alone, cut at the
+        first user turn; later sessions restore that photo. It is an optimisation: any
+        failure is logged and the request goes on without it."""
+        if ARCH != "qwen36" or not _env_on("COLI_PREFIX_WARM") or not isinstance(prompt, str):
+            return False
+        cut = prompt.find("<|im_start|>user")
+        minimum = _positive_env("COLI_PREFIX_WARM_MIN_CHARS", 3000)
+        if cut < minimum:
+            return False
+        prefix = prompt[:cut]
+        key = (id(self.engine), hashlib.sha1(prefix.encode("utf-8", "replace")).digest())
+        capacity = max(1, min(_positive_env("COLI_PIN_SLOTS", 4), 8))
+        with self._warm_lock:
+            if key in self._warmed:
+                self._warmed.move_to_end(key)
+                return False
+        try:
+            self.engine.generate(prefix, 1, 0.0, 1.0, lambda _text: None, cache_slot=cache_slot,
+                                 cancelled=cancelled, pin=True)
+        except Exception as error:
+            if cancelled is not None and cancelled():
+                raise
+            print(f"[gateway] prefix warm-up skipped: {error}", file=sys.stderr, flush=True)
+            return False
+        with self._warm_lock:
+            self._warmed[key] = True
+            while len(self._warmed) > capacity:
+                self._warmed.popitem(last=False)
+        print(f"[gateway] prefix warm-up: system prefix of {len(prefix)} characters pinned",
+              file=sys.stderr, flush=True)
+        return True
+
     def generate(self, prompt, max_tokens, temperature, top_p, on_text, *args, **kwargs):
         started = time.monotonic()
         first_output = False
+        if kwargs.get("image") is None and kwargs.get("audio") is None and not kwargs.get("pin"):
+            self.warm_prefix(prompt, kwargs.get("cache_slot", args[0] if args else 0),
+                             kwargs.get("cancelled"))
 
         def measured(callback):
             def feed(text):

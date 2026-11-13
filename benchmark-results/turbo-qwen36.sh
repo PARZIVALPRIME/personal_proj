@@ -88,6 +88,12 @@ export Q36_EVICT=slru Q36_SLRU_PROT=0.8 Q36_HEAT=${Q36_HEAT:-1}
 # 0.92 left 81-129 MiB free and swapped hundreds of thousands of pages on long prompts;
 # 0.80 kept about 1.4 GiB free with a lower long TTFT. RAM_GB, if set, overrides this.
 export Q36_RAM_FRAC=${Q36_RAM_FRAC:-0.80}
+# Q36_CACHE_GB=N fixes the expert cache (RAM_GB) so runs are comparable; the default
+# sizes it from the RAM free at launch, which varied 117-164 slots/layer between sweeps.
+[ -n "${Q36_CACHE_GB:-}" ] && export RAM_GB=$Q36_CACHE_GB
+# Gateway: pin the stable system prefix so a new agent session skips its ~17 s prefill.
+# COLI_PREFIX_WARM=0 turns it off.
+export COLI_PREFIX_WARM=${COLI_PREFIX_WARM:-1} COLI_PIN_SLOTS=${COLI_PIN_SLOTS:-6}
 export Q36_MTP=${Q36_MTP:-0}
 export Q36_LOOKAHEAD=${Q36_LOOKAHEAD:-1}
 export Q36_XPACK=${Q36_XPACK:-1}
