@@ -1,0 +1,166 @@
+{
+  "started_utc": "2026-11-13T16:42:44.293230+00:00",
+  "think": false,
+  "max_tokens": 512,
+  "context": "/home/parzivalprime/personal_proj/benchmark-results/prompt-long.txt",
+  "context_sha256": "cd410791da90635a1c4d37c0973c630f08635f2297439df91cc4f237ff99bebc",
+  "environment": {
+    "COLI_CUDA": "0",
+    "COLI_ENGINE": "/home/parzivalprime/personal_proj/c/qwen36",
+    "COLI_LOOKUP": "1",
+    "COLI_VK_SHADERS": "/home/parzivalprime/personal_proj/c/shaders",
+    "COLI_VK_TIER": "1",
+    "COLI_VK_TIER_EXCLUSIVE": "0",
+    "COLI_VK_TIER_HOST": "0",
+    "COLI_VK_TIER_RESERVE_GB": "0.5",
+    "COLI_VULKAN": "1",
+    "OMP_NUM_THREADS": "6",
+    "PILOT": "0",
+    "Q36_CONF": "none",
+    "Q36_EVICT": "slru",
+    "Q36_HEAT": "/home/parzivalprime/personal_proj/benchmark-results/linux-memory-20261109-230841/serving/r1-baseline.heat",
+    "Q36_HEAT_WAIT": "1",
+    "Q36_IO_THREADS": "8",
+    "Q36_LOOKAHEAD": "1",
+    "Q36_MAXT": "16384",
+    "Q36_MTP": "0",
+    "Q36_RAM_FRAC": "0.80",
+    "Q36_SLRU_PROT": "0.8",
+    "Q36_VK_TIER_MIN_ROWS": "64",
+    "Q36_XPACK": "1",
+    "SNAP": "/home/parzivalprime/colibri-models/qwen36-35b"
+  },
+  "starting_system": {
+    "monotonic_s": 365.692903874,
+    "meminfo": "MemTotal:       15747444 kB\nMemFree:        10187284 kB\nMemAvailable:   12943156 kB\nBuffers:            4312 kB\nCached:          2996348 kB\nSwapCached:            0 kB\nActive:          1357156 kB\nInactive:        2983312 kB\nActive(anon):    1356396 kB\nInactive(anon):     6520 kB\nActive(file):        760 kB\nInactive(file):  2976792 kB\nUnevictable:          96 kB\nMlocked:              96 kB\nSwapTotal:      15747068 kB\nSwapFree:       15745132 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:             11628 kB\nWriteback:             0 kB\nAnonPages:       1331680 kB\nMapped:           427156 kB\nShmem:             23336 kB\nKReclaimable:      58620 kB\nSlab:             206844 kB\nSReclaimable:      58620 kB\nSUnreclaim:       148224 kB\nKernelStack:       12816 kB\nPageTables:        27768 kB\nSecPageTables:      3624 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:    23620788 kB\nCommitted_AS:    7440172 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:      178888 kB\nVmallocChunk:          0 kB\nPercpu:            15872 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:    221184 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nCmaTotal:              0 kB\nCmaFree:               0 kB\nUnaccepted:            0 kB\nBalloon:               0 kB\nGPUActive:        237404 kB\nGPUReclaim:       279536 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:     1009184 kB\nDirectMap2M:     8851456 kB\nDirectMap1G:     7340032 kB\n",
+    "vmstat": "nr_free_pages 2546821\nnr_free_pages_blocks 2008064\nnr_zone_inactive_anon 1630\nnr_zone_active_anon 339099\nnr_zone_inactive_file 744198\nnr_zone_active_file 190\nnr_zone_unevictable 24\nnr_zone_write_pending 2903\nnr_mlock 24\nnr_zspages 269\nnr_free_cma 0\nnr_unaccepted 0\nnuma_hit 7058674\nnuma_miss 0\nnuma_foreign 0\nnuma_interleave 2155\nnuma_local 7058674\nnuma_other 0\nnr_inactive_anon 1630\nnr_active_anon 339099\nnr_inactive_file 744198\nnr_active_file 190\nnr_unevictable 24\nnr_slab_reclaimable 14655\nnr_slab_unreclaimable 37056\nnr_isolated_anon 0\nnr_isolated_file 0\nworkingset_nodes 2\nworkingset_refault_anon 110\nworkingset_refault_file 290\nworkingset_activate_anon 106\nworkingset_activate_file 60\nworkingset_restore_anon 106\nworkingset_restore_file 60\nworkingset_nodereclaim 52\nnr_anon_pages 332920\nnr_mapped 106789\nnr_file_pages 750165\nnr_dirty 2907\nnr_writeback 0\nnr_shmem 5834\nnr_shmem_hugepages 0\nnr_shmem_pmdmapped 0\nnr_file_hugepages 0\nnr_file_pmdmapped 0\nnr_anon_transparent_hugepages 108\nnr_vmscan_write 594\nnr_vmscan_immediate_reclaim 0\nnr_dirtied 235640\nnr_written 218050\nnr_throttled_written 0\nnr_kernel_misc_reclaimable 0\nnr_foll_pin_acquired 354\nnr_foll_pin_released 354\nnr_vmalloc 44722\nnr_kernel_stack 12816\nnr_page_table_pages 6942\nnr_sec_page_table_pages 906\nnr_iommu_pages 906\nnr_swapcached 0\npgpromote_success 0\npgpromote_candidate 0\npgpromote_candidate_nrl 0\npgdemote_kswapd 0\npgdemote_direct 0\npgdemote_khugepaged 0\npgdemote_proactive 0\npgsteal_kswapd 0\npgsteal_direct 2659\npgsteal_khugepaged 0\npgsteal_proactive 0\npgsteal_anon 594\npgsteal_file 2065\npgscan_kswapd 0\npgscan_direct 3131\npgscan_khugepaged 0\npgscan_proactive 0\npgscan_anon 887\npgscan_file 2244\npgrotate_anon 293\npgrotate_file 179\npgrefill 4698\nnr_hugetlb 0\nnr_balloon_pages 0\nnr_kernel_file_pages 30168\nnr_gpu_active 59351\nnr_gpu_reclaim 69884\nnr_dirty_threshold 65536\nnr_dirty_background_threshold 16384\nnr_memmap_pages 0\nnr_memmap_boot_pages 63488\npgpgin 1590315\npgpgout 683297\npswpin 110\npswpout 587\npgalloc_dma 512\npgalloc_dma32 195393\npgalloc_normal 9006180\npgalloc_movable 0\npgalloc_device 0\nallocstall_dma 0\nallocstall_dma32 0\nallocstall_normal 0\nallocstall_movable 0\nallocstall_device 0\npgskip_dma 0\npgskip_dma32 0\npgskip_normal 0\npgskip_movable 0\npgskip_device 0\npgfree 11780591\npgactivate 767\npgdeactivate 0\npglazyfree 0\npgfault 6202923\npgmajfault 1608\npglazyfreed 0\npgreuse 231435\npgscan_direct_throttle 0\nzone_reclaim_success 0\nzone_reclaim_failed 0\npginodesteal 0\nslabs_scanned 490\nkswapd_inodesteal 0\nkswapd_low_wmark_hit_quickly 0\nkswapd_high_wmark_hit_quickly 0\npageoutrun 0\npgrotated 0\ndrop_pagecache 0\ndrop_slab 0\noom_kill 0\nnuma_pte_updates 0\nnuma_huge_pte_updates 102\nnuma_hint_faults 0\nnuma_hint_faults_local 0\nnuma_pages_migrated 0\npgmigrate_success 0\npgmigrate_fail 0\nthp_migration_success 0\nthp_migration_fail 0\nthp_migration_split 0\ncompact_migrate_scanned 0\ncompact_free_scanned 0\ncompact_isolated 0\ncompact_stall 0\ncompact_fail 0\ncompact_success 0\ncompact_daemon_wake 0\ncompact_daemon_migrate_scanned 0\ncompact_daemon_free_scanned 0\nhtlb_buddy_alloc_success 0\nhtlb_buddy_alloc_fail 0\ncma_alloc_success 0\ncma_alloc_fail 0\nunevictable_pgs_culled 16646\nunevictable_pgs_scanned 2025\nunevictable_pgs_rescued 2057\nunevictable_pgs_mlocked 56\nunevictable_pgs_munlocked 32\nunevictable_pgs_cleared 0\nunevictable_pgs_stranded 0\nthp_fault_alloc 1678\nthp_fault_fallback 0\nthp_fault_fallback_charge 0\nthp_collapse_alloc 50\nthp_collapse_alloc_failed 0\nthp_file_alloc 0\nthp_file_fallback 0\nthp_file_fallback_charge 0\nthp_file_mapped 0\nthp_split_page 0\nthp_split_page_failed 0\nthp_deferred_split_page 87\nthp_underused_split_page 0\nthp_split_pmd 112\nthp_scan_exceed_none_pte 12\nthp_scan_exceed_swap_pte 0\nthp_scan_exceed_share_pte 1\nthp_split_pud 0\nthp_zero_page_alloc 1\nthp_zero_page_alloc_failed 0\nthp_swpout 0\nthp_swpout_fallback 0\nballoon_inflate 0\nballoon_deflate 0\nballoon_migrate 0\nswap_ra 0\nswap_ra_hit 0\nswpin_zero 0\nswpout_zero 7\nksm_swpin_copy 0\ncow_ksm 0\nzswpin 0\nzswpout 0\nzswpwb 0\ndirect_map_level2_splits 479\ndirect_map_level3_splits 6\ndirect_map_level2_collapses 0\ndirect_map_level3_collapses 0\nnrswpin 110\nnrswpout 587\nnr_unstable 0\n",
+    "pressure/memory": "some avg10=0.00 avg60=0.00 avg300=0.00 total=2448\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=2420\n",
+    "cpu_mhz": [
+      "3185.737",
+      "3839.966",
+      "3189.785",
+      "3812.755",
+      "3189.310",
+      "3259.827",
+      "3875.745",
+      "3777.810",
+      "1102.866",
+      "3257.153",
+      "3981.445",
+      "3546.523",
+      "3195.451",
+      "3891.037",
+      "4019.169",
+      "3985.490"
+    ]
+  },
+  "turns": [
+    {
+      "content": "*   **kv16.h**: Implements a float16 KV cache with precise rounding and clamping, providing optimized scalar and AVX2/F16C vectorized functions to pack, unpack, and compute dot products using half-precision values.\n*   **pin_pool.h**: Manages a fixed-size pool of pinned inference states (checkpoints) to avoid reprocessing common instruction prefixes, using an LRU strategy to store token IDs, logits, and opaque engine states.",
+      "reasoning": "",
+      "ttft_s": 16.922250235999968,
+      "first_answer_s": 16.922250235999968,
+      "total_s": 23.51858956899997,
+      "prompt_tokens": 5387,
+      "completion_tokens": 98,
+      "generation_tps": 14.705125843773803,
+      "finish_reason": "stop",
+      "truncated": false,
+      "turn": 1
+    },
+    {
+      "content": "```c\nint kv_rows_needed(int len, int cap) {\n    if (len <= 0 || cap <= 0) return 0;\n    return len < cap ? len : cap;\n}\n```",
+      "reasoning": "",
+      "ttft_s": 1.035003467000024,
+      "first_answer_s": 1.035003467000024,
+      "total_s": 4.812170605000006,
+      "prompt_tokens": 5555,
+      "completion_tokens": 47,
+      "generation_tps": 12.178439110416782,
+      "finish_reason": "stop",
+      "truncated": false,
+      "turn": 2
+    },
+    {
+      "content": "The `coli_pin_store` function has a bug: it doesn't check if `k->ids` is NULL before calling `memcpy(k->ids, ids, ...)`, which can lead to a null pointer dereference if `realloc` fails and `k->len` is set to 0 but `k->ids` remains NULL.\n\n```c\nstatic inline ColiPin *coli_pin_store(ColiPinPool *p, const int *ids, int n,\n                                      const float *logit) {\n    if (!p || p->n < 1 || !ids || n < 1) return NULL;\n    int s = coli_pin_victim(p, ids, n);\n    if (s < 0) return NULL;\n    ColiPin *k = &p->slot[s];\n    if (k->cap < n) {\n        int *grown = (int *)realloc(k->ids, (size_t)n * sizeof(int));\n        if (!grown) { k->len = 0; return NULL; }\n        k->ids = grown; k->cap = n;\n    }\n    if (logit && p->vocab > 0) {\n        if (!k->logit) k->logit = (float *)malloc((size_t)p->vocab * sizeof(float));\n        if (!k->logit) { k->len = 0; return NULL; }\n        memcpy(k->logit, logit, (size_t)p->vocab * sizeof(float));\n    }\n    if (!k->ids) return NULL; // Add this check\n    memcpy(k->ids, ids, (size_t)n * sizeof(int));\n    k->len = n;\n    k->used = ++p->clock;\n    return k;\n}\n```",
+      "reasoning": "",
+      "ttft_s": 1.0072774540000182,
+      "first_answer_s": 1.0072774540000182,
+      "total_s": 24.324904496999977,
+      "prompt_tokens": 5658,
+      "completion_tokens": 387,
+      "generation_tps": 16.554000082777662,
+      "finish_reason": "stop",
+      "truncated": false,
+      "turn": 3
+    },
+    {
+      "content": "```c\n/**\n * Returns the number of rows needed for a KV cache of capacity `cap` to store a sequence of `len` tokens.\n * Returns 0 if either argument is non-positive, otherwise returns the minimum of `len` and `cap`.\n */\nint kv_rows_needed(int len, int cap) {\n    if (len <= 0 || cap <= 0) return 0;\n    return len < cap ? len : cap;\n}\n```",
+      "reasoning": "",
+      "ttft_s": 0.9917326090000529,
+      "first_answer_s": 0.9917326090000529,
+      "total_s": 11.350900761000048,
+      "prompt_tokens": 6076,
+      "completion_tokens": 102,
+      "generation_tps": 9.749817602922143,
+      "finish_reason": "stop",
+      "truncated": false,
+      "turn": 4
+    }
+  ],
+  "server_command": [
+    "bash",
+    "/home/parzivalprime/personal_proj/benchmark-results/turbo-qwen36.sh",
+    "serve",
+    "--port",
+    "8011"
+  ],
+  "startup_s": 12.517178385999955,
+  "model": "qwen3.6-colibri",
+  "ending_system": {
+    "monotonic_s": 443.653721393,
+    "meminfo": "MemTotal:       15747444 kB\nMemFree:        12643492 kB\nMemAvailable:   14410936 kB\nBuffers:            2508 kB\nCached:          1999620 kB\nSwapCached:            0 kB\nActive:           590108 kB\nInactive:        1825280 kB\nActive(anon):     331916 kB\nInactive(anon):    98308 kB\nActive(file):     258192 kB\nInactive(file):  1726972 kB\nUnevictable:          96 kB\nMlocked:              96 kB\nSwapTotal:      15747068 kB\nSwapFree:       15735708 kB\nZswap:                 0 kB\nZswapped:              0 kB\nDirty:               560 kB\nWriteback:             0 kB\nAnonPages:        412940 kB\nMapped:           268036 kB\nShmem:             17092 kB\nKReclaimable:      66540 kB\nSlab:             214824 kB\nSReclaimable:      66540 kB\nSUnreclaim:       148284 kB\nKernelStack:       10176 kB\nPageTables:        17328 kB\nSecPageTables:      3684 kB\nNFS_Unstable:          0 kB\nBounce:                0 kB\nWritebackTmp:          0 kB\nCommitLimit:    23620788 kB\nCommitted_AS:    3010556 kB\nVmallocTotal:   34359738367 kB\nVmallocUsed:      176260 kB\nVmallocChunk:          0 kB\nPercpu:            15872 kB\nHardwareCorrupted:     0 kB\nAnonHugePages:    133120 kB\nShmemHugePages:        0 kB\nShmemPmdMapped:        0 kB\nFileHugePages:         0 kB\nFilePmdMapped:         0 kB\nCmaTotal:              0 kB\nCmaFree:               0 kB\nUnaccepted:            0 kB\nBalloon:               0 kB\nGPUActive:         74572 kB\nGPUReclaim:         6144 kB\nHugePages_Total:       0\nHugePages_Free:        0\nHugePages_Rsvd:        0\nHugePages_Surp:        0\nHugepagesize:       2048 kB\nHugetlb:               0 kB\nDirectMap4k:     1377824 kB\nDirectMap2M:    10579968 kB\nDirectMap1G:     5242880 kB\n",
+    "vmstat": "nr_free_pages 3160873\nnr_free_pages_blocks 1355264\nnr_zone_inactive_anon 24577\nnr_zone_active_anon 82979\nnr_zone_inactive_file 431743\nnr_zone_active_file 64548\nnr_zone_unevictable 24\nnr_zone_write_pending 140\nnr_mlock 24\nnr_zspages 920\nnr_free_cma 0\nnr_unaccepted 0\nnuma_hit 13580338\nnuma_miss 0\nnuma_foreign 0\nnuma_interleave 2155\nnuma_local 13580338\nnuma_other 0\nnr_inactive_anon 24577\nnr_active_anon 82979\nnr_inactive_file 431743\nnr_active_file 64548\nnr_unevictable 24\nnr_slab_reclaimable 16635\nnr_slab_unreclaimable 37071\nnr_isolated_anon 0\nnr_isolated_file 0\nworkingset_nodes 1499\nworkingset_refault_anon 123\nworkingset_refault_file 18871\nworkingset_activate_anon 108\nworkingset_activate_file 65\nworkingset_restore_anon 108\nworkingset_restore_file 65\nworkingset_nodereclaim 53364\nnr_anon_pages 103235\nnr_mapped 67009\nnr_file_pages 500532\nnr_dirty 140\nnr_writeback 0\nnr_shmem 4273\nnr_shmem_hugepages 0\nnr_shmem_pmdmapped 0\nnr_file_hugepages 0\nnr_file_pmdmapped 0\nnr_anon_transparent_hugepages 65\nnr_vmscan_write 2964\nnr_vmscan_immediate_reclaim 1028\nnr_dirtied 238734\nnr_written 226252\nnr_throttled_written 0\nnr_kernel_misc_reclaimable 0\nnr_foll_pin_acquired 8242746\nnr_foll_pin_released 8242746\nnr_vmalloc 44065\nnr_kernel_stack 10176\nnr_page_table_pages 4332\nnr_sec_page_table_pages 921\nnr_iommu_pages 921\nnr_swapcached 0\npgpromote_success 0\npgpromote_candidate 0\npgpromote_candidate_nrl 0\npgdemote_kswapd 0\npgdemote_direct 0\npgdemote_khugepaged 0\npgdemote_proactive 0\npgsteal_kswapd 3949299\npgsteal_direct 3043\npgsteal_khugepaged 0\npgsteal_proactive 0\npgsteal_anon 2963\npgsteal_file 3949379\npgscan_kswapd 3969849\npgscan_direct 3515\npgscan_khugepaged 0\npgscan_proactive 0\npgscan_anon 13497\npgscan_file 3959867\npgrotate_anon 10534\npgrotate_file 10488\npgrefill 308947\nnr_hugetlb 0\nnr_balloon_pages 0\nnr_kernel_file_pages 31562\nnr_gpu_active 18643\nnr_gpu_reclaim 1536\nnr_dirty_threshold 65536\nnr_dirty_background_threshold 16384\nnr_memmap_pages 0\nnr_memmap_boot_pages 63488\npgpgin 48910775\npgpgout 727569\npswpin 123\npswpout 2956\npgalloc_dma 512\npgalloc_dma32 1420541\npgalloc_normal 18011784\npgalloc_movable 0\npgalloc_device 0\nallocstall_dma 0\nallocstall_dma32 0\nallocstall_normal 6\nallocstall_movable 0\nallocstall_device 0\npgskip_dma 0\npgskip_dma32 0\npgskip_normal 0\npgskip_movable 0\npgskip_device 0\npgfree 22607347\npgactivate 17011\npgdeactivate 0\npglazyfree 0\npgfault 9079388\npgmajfault 1827\npglazyfreed 0\npgreuse 232884\npgscan_direct_throttle 0\nzone_reclaim_success 0\nzone_reclaim_failed 0\npginodesteal 0\nslabs_scanned 181094\nkswapd_inodesteal 1\nkswapd_low_wmark_hit_quickly 143\nkswapd_high_wmark_hit_quickly 5\npageoutrun 180\npgrotated 1013\ndrop_pagecache 0\ndrop_slab 0\noom_kill 0\nnuma_pte_updates 0\nnuma_huge_pte_updates 102\nnuma_hint_faults 0\nnuma_hint_faults_local 0\nnuma_pages_migrated 0\npgmigrate_success 4086\npgmigrate_fail 0\nthp_migration_success 0\nthp_migration_fail 0\nthp_migration_split 0\ncompact_migrate_scanned 12323\ncompact_free_scanned 7270\ncompact_isolated 8886\ncompact_stall 1\ncompact_fail 0\ncompact_success 1\ncompact_daemon_wake 16\ncompact_daemon_migrate_scanned 11806\ncompact_daemon_free_scanned 6985\nhtlb_buddy_alloc_success 0\nhtlb_buddy_alloc_fail 0\ncma_alloc_success 0\ncma_alloc_fail 0\nunevictable_pgs_culled 16646\nunevictable_pgs_scanned 2025\nunevictable_pgs_rescued 2057\nunevictable_pgs_mlocked 56\nunevictable_pgs_munlocked 32\nunevictable_pgs_cleared 0\nunevictable_pgs_stranded 0\nthp_fault_alloc 7119\nthp_fault_fallback 192\nthp_fault_fallback_charge 0\nthp_collapse_alloc 79\nthp_collapse_alloc_failed 0\nthp_file_alloc 0\nthp_file_fallback 0\nthp_file_fallback_charge 0\nthp_file_mapped 0\nthp_split_page 1\nthp_split_page_failed 0\nthp_deferred_split_page 89\nthp_underused_split_page 0\nthp_split_pmd 117\nthp_scan_exceed_none_pte 12\nthp_scan_exceed_swap_pte 0\nthp_scan_exceed_share_pte 1\nthp_split_pud 0\nthp_zero_page_alloc 1\nthp_zero_page_alloc_failed 0\nthp_swpout 3\nthp_swpout_fallback 0\nballoon_inflate 0\nballoon_deflate 0\nballoon_migrate 0\nswap_ra 0\nswap_ra_hit 0\nswpin_zero 0\nswpout_zero 7\nksm_swpin_copy 0\ncow_ksm 0\nzswpin 0\nzswpout 0\nzswpwb 0\ndirect_map_level2_splits 659\ndirect_map_level3_splits 8\ndirect_map_level2_collapses 0\ndirect_map_level3_collapses 0\nnrswpin 123\nnrswpout 1423\nnr_unstable 0\n",
+    "pressure/memory": "some avg10=0.00 avg60=0.07 avg300=0.03 total=196206\nfull avg10=0.00 avg60=0.07 avg300=0.03 total=195854\n",
+    "cpu_mhz": [
+      "1102.866",
+      "1102.866",
+      "1102.866",
+      "1102.866",
+      "1102.866",
+      "1102.866",
+      "1102.866",
+      "1102.866",
+      "1102.866",
+      "1102.866",
+      "3194.333",
+      "1102.866",
+      "1102.866",
+      "1102.866",
+      "1102.866",
+      "1102.866"
+    ]
+  },
+  "prefix_events": [
+    {
+      "reused": 0,
+      "detail": "no reuse: held=0 cap=6144 prompt=5387"
+    },
+    {
+      "reused": 5485,
+      "prompt": 5555
+    },
+    {
+      "reused": 5602,
+      "prompt": 5658
+    },
+    {
+      "reused": 6045,
+      "prompt": 6076
+    }
+  ],
+  "cache_slots_per_layer": 153,
+  "prefix_reuse_engaged": true,
+  "prefix_reuse_all_followups": true,
+  "exit_code": 0
+}

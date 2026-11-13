@@ -1,0 +1,139 @@
+[OMP] qwen36: hot-thread tuning, re-exec once (COLI_NO_OMP_TUNE=1 to skip)
+== qwen36 Phase-2 engine | cache=auto/layer bits=4 ctx=16384 pilot=0 wide=1 hot=0 smooth=0.30 conf=0.92 ==
+[tok] loaded 248044 pieces (max id 248069) from /home/parzivalprime/colibri-models/qwen36-35b/tokenizer.json
+[enc] prompt tokens: 32 | generating 256 new tokens
+[meta] loaded: q_heads=16 kv_heads=2 head_dim=256 q_head_dim=512 k_head_dim=256 v_head_dim=256 o_in=4096 rotary_dim=64 n_experts=256 topk=8 inter=512 shared_inter=512 n_group=1 topk_group=1 attn_output_gate=1 n_active=10
+[meta] DeltaNet: vheads=32 kheads=16 kdim=128 vdim=128 convk=4 conv_dim=8192
+[qwen36] embedding: rows read in place from the checkpoint, COLI_EMBED_MMAP=0 builds the f32 table
+[dense-i8] 291 matrices quantized during load, 7.2 GB f32 freed
+[qwen36] expert kernel: planar int4 in RAM (expert_ffn.h), QWEN_EXPERT_KERNEL=0 restores int8 unpack
+[qwen36] cache auto-sized: 138 slots/layer of 256 experts (12.1 GB budget via RAM_GB, 1.9 GB resident, 0.31 GB KV reserved for 16384 positions, 2 MB/slot, floor 8)
+[qwen36] group-scaled experts: gs=64
+resident weights loaded in 4.6s | RSS after load: 2.94 GB
+[VK] VRAM pressure-proofing: memory_priority on, memory_budget on
+[VK] memory: mapped weights, the host-visible device-local memory gave the 3 GiB asked (9/10 of its heap, less if its budget leaves less), found in 0.1 s
+[VK] ready: NVIDIA GeForce RTX 3050 Laptop GPU, compute qfam 0, memtype 5, fused gate+up, absorb attention, tiled GEMM from S=2 and S*O>=4096 (cooperative matrix)
+[VK] qwen36: device ready, dense matrices on the device (default)
+[VK] qwen36: dense chain on (a discrete GPU, beside the expert tier)
+[qwen36] expert format on disk: int4 packed (tier fmt=4)
+[VK] qwen36 chain fit: free 3965517824 B, reserve 536870912 B, fixed 555838720 B (the engine's 69299456 B, the pools' 486539264 B), tail 509552640 B, layers 40171776 40171776 40171776 31804672 40171776 40171776 40171776 31804672 40171776 40171776 40171776 31804672 40171776 40171776 40171776 31804672 40171776 40171776 40171776 31804672 40171776 40171776 40171776 31804672 40171776 40171776 40171776 31804672 40171776 40171776 40171776 31804672 40171776 40171776 40171776 31804672 40171776 40171776 40171776 31804672 B, matrices 37827592 37827592 37827592 30999556 37827592 37827592 37827592 30999556 37827592 37827592 37827592 30999556 37827592 37827592 37827592 30999556 37827592 37827592 37827592 30999556 37827592 37827592 37827592 30999556 37827592 37827592 37827592 30999556 37827592 37827592 37827592 30999556 37827592 37827592 37827592 30999556 37827592 37827592 37827592 30999556 B
+[VK] qwen36 chain: 40 of 40 layers on the device (1.42 GiB), 0 on the CPU (free 3.69 GiB, reserve 512.0 MiB)
+[VK] chain: chain_gemv2 stages x in 48 KiB of shared memory, the device's limit
+[VK] qwen36: dense weights on the device only (a discrete GPU with room for them: 1.79 of 2.63 GiB free; COLI_VK_DENSE_HOST=1 keeps the host copy)
+[VK] qwen36 chain: 40 of 40 layers placed: 1444823320 B of matrices on the device (the fit counted 1444823320 B for these layers), chain buffers 78891776 B, device memory held 1811939328 B
+[VK] qwen36 chain: 40 layers on the device (10 attention), 4.4 MiB of parameters
+[VK] chain: 20 pipelines made before the expert tier, in 0.0 s (COLI_VK_CHAIN_PREWARM=0: at first use)
+[VK] qwen36: 291 dense matrices on the device only, 1.81 GiB of host RAM given back; kept on the host: the embedding (its rows are gathered on the CPU), the DeltaNet's a/b rows and the shared expert's gate vector, norms, the vision tower, any imported pages; RSS now 0.973 GiB
+[VK] qwen36: 1.81 GiB of dense host copies now live on the device only: expert cache 138 -> 162 slots a layer
+[USAGE] expert history: 286343680 selections (/home/parzivalprime/colibri-models/qwen36-35b/.coli_usage)
+[VK] tier qwen36: on, NVIDIA GeForce RTX 3050 Laptop GPU, budget 1.02 GiB = 550 experts of 1.7 MiB (fmt 4 gs 64, down fmt 4 gs 64), device memory, own queue, up to 16 promotions per token, balanced against the CPU, streaming cold experts of prompt steps through 64 slots
+[qwen36] int4 packed weights detected — kept int4, rows interleaved by 16 for expert_ffn.h (Q36_ILV16=0 keeps the rows)
+[VK] tier qwen36: warm start, 550 experts in 0.8s (550 from the history, 0 more to fill the device)
+[qwen36] Q36_XPACK: experts from /home/parzivalprime/colibri-models/qwen36-35b/experts.q36x (unbuffered, one read of 1.77 MB in 4 parts a miss)
+[qwen36] 8 expert loader threads: a layer's misses read in parallel (Q36_IO_THREADS=0 reads them one at a time)
+[qwen36] Q36_HEAT: 5816 experts warm in RAM in 5.4 s (1.89 GB/s)
+Generated (256 new tokens):
+Text : [qwen36] KV cache: float16, 0.02 GiB at 1024 positions (half of float32; Q36_KV=f32 keeps float32)
+[VK] qwen36 chain: prompt chunks of up to 512 rows (389 KiB a row; 0.52 GiB free on the device or in RAM, half of it at most; COLI_VK_CHAIN_ROWS sets it, COLI_VK_CHAIN_ROWS_MAX caps it at 8192)
+[VK] chain profile scope: decode only (after prefill)
+[qwen36] Q36_LOOKAHEAD=1: the next layers' likely experts (top-k + 4) read ahead
+
+assistant
+<think>
+Here's a thinking process:
+
+1.  **Analyze User Input:**
+   - **Role:** Coding benchmark
+[timers] window: moe 35 ms/token (last 32)
+   - **Task:** Write a concise Python function `fibonacci(n)` that returns the nth Fibonacci number
+   - **Requirement:** Include a brief explanation
+   - **Constraint:** Output code only (Wait, this is contradictory: "with a brief explanation"[timers] window: moe 29 ms/token (last 32)
+ vs "Output code only." I need to resolve this. Usually, "Output code only" is a strict constraint. I'll prioritize it, but I can embed the explanation as[timers] window: moe 26 ms/token (last 32)
+ a docstring or comment within the code block to satisfy both, or just output the code block as requested. The prompt says "Output code only." I will strictly output only the code block.)
+   - **Function[timers] window: moe 25 ms/token (last 32)
+:** `fibonacci(n)` returns nth Fibonacci number (typically 0-indexed or 1-indexed? I'll assume 0-indexed: F(0)=0, F(1)=1, F(2)=[timers] window: moe 34 ms/token (last 32)
+1, etc. I'll make it clear in comments/docstring if needed, but keep it concise.)
+   - **Language:** Python
+
+2.  **Determine Implementation:**
+   - For conciseness and
+TTFT: 1.286 s (time to first token)
+[qwen36 spec gate] run: T(1) 48.9 ms, rows 2:1.42 3:2.18 4:2.09, rho 0.40, acceptance by position 0.68 0.50 0.50 0.50 0.50
+[qwen36 lookup] run: 1.12 tokens/forward (227 forwards per 255 tokens) | acceptance 65.1% (28/43 drafts in 37 verifies) | gate on, 3 declined, 5 probes
+[timers] decode phases omitted: speculative multi-row verification; use [q36 bench] wall timing
+
+PEAK RSS: 11.46 GB
+Expert cache hit rate: 95.6% (hit=81317 miss=3705)
+Speed: 18.69 tok/s (13.7s for 256 tokens)
+[q36 bench] generated=256 total_s=13.697607826 ttft_s=1.286105429 ids_fnv64=3e07b1f9af7dabe8
+[q36 bench] cache_slots_per_layer=162
+[q36 decode cache] layer=0 slots=162 hits=1787 misses=340 load_ms=275.108021
+[q36 decode cache] layer=1 slots=162 hits=1799 misses=297 load_ms=587.115991
+[q36 decode cache] layer=2 slots=162 hits=1750 misses=332 load_ms=645.826301
+[q36 decode cache] layer=3 slots=162 hits=1835 misses=239 load_ms=450.239551
+[q36 decode cache] layer=4 slots=162 hits=1951 misses=127 load_ms=218.040422
+[q36 decode cache] layer=5 slots=162 hits=1959 misses=88 load_ms=131.179030
+[q36 decode cache] layer=6 slots=162 hits=1933 misses=102 load_ms=146.242422
+[q36 decode cache] layer=7 slots=162 hits=1998 misses=41 load_ms=65.186482
+[q36 decode cache] layer=8 slots=162 hits=1977 misses=36 load_ms=71.625600
+[q36 decode cache] layer=9 slots=162 hits=1986 misses=47 load_ms=75.838536
+[q36 decode cache] layer=10 slots=162 hits=1956 misses=88 load_ms=147.995391
+[q36 decode cache] layer=11 slots=162 hits=2010 misses=68 load_ms=99.768243
+[q36 decode cache] layer=12 slots=162 hits=1996 misses=58 load_ms=75.011875
+[q36 decode cache] layer=13 slots=162 hits=1972 misses=51 load_ms=83.121345
+[q36 decode cache] layer=14 slots=162 hits=1978 misses=31 load_ms=44.150459
+[q36 decode cache] layer=15 slots=162 hits=1986 misses=33 load_ms=51.699701
+[q36 decode cache] layer=16 slots=162 hits=2014 misses=32 load_ms=45.400968
+[q36 decode cache] layer=17 slots=162 hits=1993 misses=35 load_ms=50.385164
+[q36 decode cache] layer=18 slots=162 hits=2010 misses=23 load_ms=35.884336
+[q36 decode cache] layer=19 slots=162 hits=2000 misses=33 load_ms=47.737807
+[q36 decode cache] layer=20 slots=162 hits=2011 misses=9 load_ms=21.429078
+[q36 decode cache] layer=21 slots=162 hits=1991 misses=27 load_ms=49.276551
+[q36 decode cache] layer=22 slots=162 hits=1975 misses=72 load_ms=101.666390
+[q36 decode cache] layer=23 slots=162 hits=1986 misses=89 load_ms=130.583433
+[q36 decode cache] layer=24 slots=162 hits=1990 misses=56 load_ms=74.142482
+[q36 decode cache] layer=25 slots=162 hits=1985 misses=46 load_ms=68.170368
+[q36 decode cache] layer=26 slots=162 hits=1982 misses=39 load_ms=62.610638
+[q36 decode cache] layer=27 slots=162 hits=1972 misses=40 load_ms=60.286747
+[q36 decode cache] layer=28 slots=162 hits=1964 misses=60 load_ms=92.550150
+[q36 decode cache] layer=29 slots=162 hits=1980 misses=39 load_ms=52.877412
+[q36 decode cache] layer=30 slots=162 hits=1994 misses=27 load_ms=47.542285
+[q36 decode cache] layer=31 slots=162 hits=1995 misses=25 load_ms=42.665350
+[q36 decode cache] layer=32 slots=162 hits=1997 misses=42 load_ms=61.240963
+[q36 decode cache] layer=33 slots=162 hits=2011 misses=46 load_ms=75.716180
+[q36 decode cache] layer=34 slots=162 hits=2010 misses=50 load_ms=86.232859
+[q36 decode cache] layer=35 slots=162 hits=1999 misses=36 load_ms=63.359762
+[q36 decode cache] layer=36 slots=162 hits=1982 misses=51 load_ms=87.213791
+[q36 decode cache] layer=37 slots=162 hits=1996 misses=47 load_ms=74.592492
+[q36 decode cache] layer=38 slots=162 hits=1982 misses=62 load_ms=103.902295
+[q36 decode cache] layer=39 slots=162 hits=1954 misses=120 load_ms=201.159506
+[q36 decode vk] frames=18570 waits=18569 wait_ms=4257.179501 bytes_up=2211840 bytes_down=0
+[VK] qwen36: 0 matmuls on the GPU (362 matrices resident, 1863.9 MiB; placed int8 291, int4 0, f32 0)
+[VK] qwen36 chain: 228 forwards, 18762 frames (164166 ops, 82308 matmuls, 290 tiled GEMM), 4672.6 ms waiting for the device, 8079.4 ms of routed experts on the host, 0 layer steps with the routed experts in the frame (0 of them a prompt chunk's, 0 in the integer form), 339.0 MiB on the device
+[VK] chain profile: 4313.0 ms of device time | GEMV int8 3365.7 ms (66054) | GEMV other 25.1 ms (15889) | norm 130.7 ms (22927) | rope 12.5 ms (4540) | attention 105.7 ms (3690) | dn conv 42.7 ms (6990) | dn recurrence 452.0 ms (6990) | element-wise 89.5 ms (31779) | copy 89.3 ms (27467)
+[VK] chain profile: matmul fmt 1 S 1 [8192 x 2048]: 929.5 ms over 7600, 122.3 us each
+[VK] chain profile: matmul fmt 1 S 1 [248320 x 2048]: 567.9 ms over 190, 2989.0 us each
+[VK] chain profile: matmul fmt 1 S 1 [2048 x 4096]: 516.9 ms over 7600, 68.0 us each
+[VK] chain profile: matmul fmt 1 S 1 [4096 x 2048]: 312.6 ms over 5700, 54.8 us each
+[VK] chain profile: matmul fmt 1 S 2 [8192 x 2048]: 195.6 ms over 1280, 152.8 us each
+[VK] chain profile: matmul fmt 1 S 1 [512 x 2048]: 166.7 ms over 18998, 8.8 us each
+[VK] chain profile: matmul fmt 1 S 2 [248320 x 2048]: 123.2 ms over 32, 3850.6 us each
+[VK] chain profile: matmul fmt 1 S 2 [2048 x 4096]: 104.9 ms over 1280, 82.0 us each
+[VK] chain profile: matmul fmt 1 S 1 [2048 x 512]: 89.6 ms over 7599, 11.8 us each
+[VK] chain profile: matmul fmt 1 S 1 [256 x 2048]: 84.5 ms over 7600, 11.1 us each
+[VK] chain profile: matmul fmt 1 S 2 [4096 x 2048]: 67.5 ms over 960, 70.3 us each
+[VK] chain profile: matmul fmt 1 S 2 [512 x 2048]: 36.4 ms over 3200, 11.4 us each
+[VK] chain profile: matmul fmt 1 S 3 [8192 x 2048]: 35.1 ms over 160, 219.3 us each
+[VK] chain profile: matmul fmt 1 S 3 [248320 x 2048]: 23.1 ms over 4, 5767.9 us each
+[VK] chain profile: matmul fmt 1 S 3 [2048 x 4096]: 22.5 ms over 160, 140.4 us each
+[VK] chain profile: matmul fmt 1 S 2 [2048 x 512]: 22.1 ms over 1280, 17.3 us each
+[VK] chain profile: matmul fmt 1 S 2 [256 x 2048]: 14.3 ms over 1280, 11.1 us each
+[VK] chain profile: matmul fmt 10 S 1 [64 x 2048]: 12.5 ms over 5700, 2.2 us each
+[VK] chain profile: matmul fmt 1 S 3 [4096 x 2048]: 12.4 ms over 120, 103.1 us each
+[VK] chain profile: matmul fmt 1 S 4 [8192 x 2048]: 9.3 ms over 40, 232.7 us each
+[VK] chain profile: matmul fmt 10 S 1 [1 x 2048]: 9.1 ms over 7599, 1.2 us each
+[VK] chain profile: matmul fmt 1 S 3 [512 x 2048]: 6.9 ms over 400, 17.2 us each
+[VK] chain profile: matmul fmt 1 S 4 [248320 x 2048]: 6.3 ms over 1, 6267.9 us each
+[VK] chain profile: matmul fmt 1 S 4 [2048 x 4096]: 5.7 ms over 40, 141.5 us each
+[VK] tier qwen36 run: device 0 of 0 routed experts (0.0%; this run 0 of 0) | CPU RAM hits 81317, disk loads 3705 | resident 550 (budget 550, 1.01 GiB of 1.02 GiB, 5 blocks, frag 0.00) | uploads 550 (825.0 MiB, 550 warm), evictions 0, skipped 0 queue + 0 rate, failed 0 | device 0.0 ms, CPU share 0.0 ms, waited 0.0 ms (0% of device time hidden) | balance: device share 1.00, 0 rows handed to the CPU
+[VK] qwen36: dense weights at exit: 291 matrices on the device only (1.81 GiB of host copies dropped), 0 read back from disk for the CPU (0.0 MiB); RSS 10.990 GiB

@@ -1,0 +1,395 @@
+{
+  "label": "bench-baseline-r0",
+  "command": [
+    "/home/parzivalprime/personal_proj/c/qwen36",
+    "0",
+    "4",
+    "/home/parzivalprime/personal_proj/benchmark-results/prompt.txt"
+  ],
+  "environment": {
+    "COLI_CUDA": "0",
+    "COLI_ENGINE": "/home/parzivalprime/personal_proj/c/qwen36",
+    "COLI_LOOKUP": "1",
+    "COLI_TIMERS": "1",
+    "COLI_VK_SHADERS": "/home/parzivalprime/personal_proj/c/shaders",
+    "COLI_VK_TIER": "1",
+    "COLI_VK_TIER_EXCLUSIVE": "0",
+    "COLI_VK_TIER_HOST": "0",
+    "COLI_VK_TIER_RESERVE_GB": "0.5",
+    "COLI_VULKAN": "1",
+    "N_NEW": "256",
+    "OMP_NUM_THREADS": "6",
+    "PILOT": "0",
+    "Q36_BENCH_METRICS": "1",
+    "Q36_CONF": "none",
+    "Q36_EVICT": "slru",
+    "Q36_HEAT": "/home/parzivalprime/personal_proj/benchmark-results/linux-memory-20261109-230841/profile-decode/bench-baseline-r0.heat",
+    "Q36_HEAT_WAIT": "1",
+    "Q36_IO_THREADS": "8",
+    "Q36_LOOKAHEAD": "1",
+    "Q36_MAXT": "16384",
+    "Q36_MTP": "0",
+    "Q36_PROFILE_DECODE": "2",
+    "Q36_RAM_FRAC": "0.80",
+    "Q36_SLRU_PROT": "0.8",
+    "Q36_VK_TIER_MIN_ROWS": "64",
+    "Q36_XPACK": "1",
+    "SNAP": "/home/parzivalprime/colibri-models/qwen36-35b"
+  },
+  "prompt_path": "/home/parzivalprime/personal_proj/benchmark-results/prompt.txt",
+  "requested_output_tokens": 256,
+  "engine_sha256": "8d742cb73f82f79de16ee09bd954ad53cd3606bd574247c245d218d45e5188f2",
+  "prompt_sha256": "8df7d5c42b8bcd2f84c0b01989e0e42c91ff835cf0b8e825d39b07c89c750755",
+  "started_utc": "2026-11-13T16:57:00.329291+00:00",
+  "starting_mem_available_kib": 14525720,
+  "decode_timing": "engine_monotonic",
+  "generated_ids_fnv64": "3e07b1f9af7dabe8",
+  "vk_profile": [
+    "[VK] chain profile scope: decode only (after prefill)",
+    "[VK] chain profile: 4319.3 ms of device time | GEMV int8 3407.2 ms (65763) | GEMV other 25.1 ms (15819) | norm 122.9 ms (22826) | rope 11.7 ms (4520) | attention 101.6 ms (3670) | dn conv 42.0 ms (7170) | dn recurrence 441.6 ms (7170) | element-wise 83.9 ms (31639) | copy 83.2 ms (27346)",
+    "[VK] chain profile: matmul fmt 1 S 1 [8192 x 2048]: 931.1 ms over 7600, 122.5 us each",
+    "[VK] chain profile: matmul fmt 1 S 1 [248320 x 2048]: 613.5 ms over 190, 3229.0 us each",
+    "[VK] chain profile: matmul fmt 1 S 1 [2048 x 4096]: 515.2 ms over 7600, 67.8 us each",
+    "[VK] chain profile: matmul fmt 1 S 1 [4096 x 2048]: 315.8 ms over 5700, 55.4 us each",
+    "[VK] chain profile: matmul fmt 1 S 1 [512 x 2048]: 165.3 ms over 18998, 8.7 us each",
+    "[VK] chain profile: matmul fmt 1 S 2 [8192 x 2048]: 158.9 ms over 1120, 141.8 us each",
+    "[VK] chain profile: matmul fmt 1 S 2 [248320 x 2048]: 100.7 ms over 28, 3597.8 us each",
+    "[VK] chain profile: matmul fmt 1 S 1 [2048 x 512]: 87.8 ms over 7599, 11.6 us each",
+    "[VK] chain profile: matmul fmt 1 S 2 [2048 x 4096]: 86.0 ms over 1120, 76.8 us each",
+    "[VK] chain profile: matmul fmt 1 S 1 [256 x 2048]: 80.7 ms over 7600, 10.6 us each",
+    "[VK] chain profile: matmul fmt 1 S 2 [4096 x 2048]: 54.1 ms over 840, 64.4 us each",
+    "[VK] chain profile: matmul fmt 1 S 3 [8192 x 2048]: 33.4 ms over 160, 209.0 us each",
+    "[VK] chain profile: matmul fmt 1 S 2 [512 x 2048]: 29.2 ms over 2800, 10.4 us each",
+    "[VK] chain profile: matmul fmt 1 S 4 [8192 x 2048]: 26.9 ms over 120, 224.1 us each",
+    "[VK] chain profile: matmul fmt 1 S 3 [248320 x 2048]: 21.9 ms over 4, 5467.9 us each",
+    "[VK] chain profile: matmul fmt 1 S 3 [2048 x 4096]: 21.7 ms over 160, 135.7 us each",
+    "[VK] chain profile: matmul fmt 1 S 5 [8192 x 2048]: 20.5 ms over 40, 512.6 us each",
+    "[VK] chain profile: matmul fmt 1 S 2 [2048 x 512]: 18.2 ms over 1120, 16.3 us each",
+    "[VK] chain profile: matmul fmt 1 S 4 [248320 x 2048]: 18.2 ms over 3, 6068.9 us each",
+    "[VK] chain profile: matmul fmt 1 S 4 [2048 x 4096]: 16.5 ms over 120, 137.1 us each",
+    "[VK] chain profile: matmul fmt 1 S 5 [248320 x 2048]: 14.8 ms over 1, 14814.2 us each",
+    "[VK] chain profile: matmul fmt 10 S 1 [64 x 2048]: 13.2 ms over 5700, 2.3 us each",
+    "[VK] chain profile: matmul fmt 1 S 3 [4096 x 2048]: 11.8 ms over 120, 98.2 us each",
+    "[VK] chain profile: matmul fmt 1 S 2 [256 x 2048]: 11.5 ms over 1120, 10.3 us each"
+  ],
+  "decode_cache": [
+    {
+      "layer": 0,
+      "slots": 162,
+      "hits": 1821,
+      "misses": 344,
+      "load_ms": 314.151286
+    },
+    {
+      "layer": 1,
+      "slots": 162,
+      "hits": 1837,
+      "misses": 295,
+      "load_ms": 580.65276
+    },
+    {
+      "layer": 2,
+      "slots": 162,
+      "hits": 1779,
+      "misses": 334,
+      "load_ms": 650.084696
+    },
+    {
+      "layer": 3,
+      "slots": 162,
+      "hits": 1861,
+      "misses": 242,
+      "load_ms": 454.775771
+    },
+    {
+      "layer": 4,
+      "slots": 162,
+      "hits": 1983,
+      "misses": 128,
+      "load_ms": 216.605998
+    },
+    {
+      "layer": 5,
+      "slots": 162,
+      "hits": 1983,
+      "misses": 91,
+      "load_ms": 139.859557
+    },
+    {
+      "layer": 6,
+      "slots": 162,
+      "hits": 1947,
+      "misses": 106,
+      "load_ms": 154.429396
+    },
+    {
+      "layer": 7,
+      "slots": 162,
+      "hits": 2019,
+      "misses": 42,
+      "load_ms": 67.660727
+    },
+    {
+      "layer": 8,
+      "slots": 162,
+      "hits": 1994,
+      "misses": 36,
+      "load_ms": 66.012599
+    },
+    {
+      "layer": 9,
+      "slots": 162,
+      "hits": 2007,
+      "misses": 47,
+      "load_ms": 73.741131
+    },
+    {
+      "layer": 10,
+      "slots": 162,
+      "hits": 1968,
+      "misses": 92,
+      "load_ms": 162.227241
+    },
+    {
+      "layer": 11,
+      "slots": 162,
+      "hits": 2025,
+      "misses": 73,
+      "load_ms": 107.897631
+    },
+    {
+      "layer": 12,
+      "slots": 162,
+      "hits": 2014,
+      "misses": 60,
+      "load_ms": 83.341484
+    },
+    {
+      "layer": 13,
+      "slots": 162,
+      "hits": 1980,
+      "misses": 55,
+      "load_ms": 93.738571
+    },
+    {
+      "layer": 14,
+      "slots": 162,
+      "hits": 1991,
+      "misses": 31,
+      "load_ms": 44.884103
+    },
+    {
+      "layer": 15,
+      "slots": 162,
+      "hits": 1992,
+      "misses": 31,
+      "load_ms": 51.12048
+    },
+    {
+      "layer": 16,
+      "slots": 162,
+      "hits": 2031,
+      "misses": 33,
+      "load_ms": 48.370286
+    },
+    {
+      "layer": 17,
+      "slots": 162,
+      "hits": 2013,
+      "misses": 36,
+      "load_ms": 52.588656
+    },
+    {
+      "layer": 18,
+      "slots": 162,
+      "hits": 2023,
+      "misses": 23,
+      "load_ms": 35.167625
+    },
+    {
+      "layer": 19,
+      "slots": 162,
+      "hits": 2015,
+      "misses": 33,
+      "load_ms": 48.503183
+    },
+    {
+      "layer": 20,
+      "slots": 162,
+      "hits": 2020,
+      "misses": 9,
+      "load_ms": 23.820798
+    },
+    {
+      "layer": 21,
+      "slots": 162,
+      "hits": 1996,
+      "misses": 29,
+      "load_ms": 51.398782
+    },
+    {
+      "layer": 22,
+      "slots": 162,
+      "hits": 1988,
+      "misses": 75,
+      "load_ms": 108.570442
+    },
+    {
+      "layer": 23,
+      "slots": 162,
+      "hits": 2011,
+      "misses": 90,
+      "load_ms": 135.78552
+    },
+    {
+      "layer": 24,
+      "slots": 162,
+      "hits": 2006,
+      "misses": 56,
+      "load_ms": 76.746672
+    },
+    {
+      "layer": 25,
+      "slots": 162,
+      "hits": 1998,
+      "misses": 47,
+      "load_ms": 73.35056
+    },
+    {
+      "layer": 26,
+      "slots": 162,
+      "hits": 2001,
+      "misses": 38,
+      "load_ms": 61.248783
+    },
+    {
+      "layer": 27,
+      "slots": 162,
+      "hits": 1987,
+      "misses": 39,
+      "load_ms": 58.577022
+    },
+    {
+      "layer": 28,
+      "slots": 162,
+      "hits": 1984,
+      "misses": 61,
+      "load_ms": 96.512056
+    },
+    {
+      "layer": 29,
+      "slots": 162,
+      "hits": 1997,
+      "misses": 40,
+      "load_ms": 54.804874
+    },
+    {
+      "layer": 30,
+      "slots": 162,
+      "hits": 2011,
+      "misses": 26,
+      "load_ms": 47.923105
+    },
+    {
+      "layer": 31,
+      "slots": 162,
+      "hits": 2011,
+      "misses": 27,
+      "load_ms": 48.831704
+    },
+    {
+      "layer": 32,
+      "slots": 162,
+      "hits": 2020,
+      "misses": 41,
+      "load_ms": 64.535797
+    },
+    {
+      "layer": 33,
+      "slots": 162,
+      "hits": 2035,
+      "misses": 46,
+      "load_ms": 78.061722
+    },
+    {
+      "layer": 34,
+      "slots": 162,
+      "hits": 2030,
+      "misses": 48,
+      "load_ms": 86.171038
+    },
+    {
+      "layer": 35,
+      "slots": 162,
+      "hits": 2014,
+      "misses": 37,
+      "load_ms": 66.52376
+    },
+    {
+      "layer": 36,
+      "slots": 162,
+      "hits": 2000,
+      "misses": 52,
+      "load_ms": 87.756099
+    },
+    {
+      "layer": 37,
+      "slots": 162,
+      "hits": 2009,
+      "misses": 47,
+      "load_ms": 76.140854
+    },
+    {
+      "layer": 38,
+      "slots": 162,
+      "hits": 2005,
+      "misses": 60,
+      "load_ms": 98.50354
+    },
+    {
+      "layer": 39,
+      "slots": 162,
+      "hits": 1973,
+      "misses": 119,
+      "load_ms": 195.547363
+    }
+  ],
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_s": 27.11674017700011,
+  "metrics": {
+    "prompt_tokens": 32.0,
+    "vk_forwards": 227.0,
+    "vk_wait_ms": 4682.4,
+    "vk_host_experts_ms": 8189.3,
+    "vk_profile_device_ms": 4319.3,
+    "ttft_s": 1.294593745,
+    "reported_speed_tps": 18.52,
+    "cache_hit_pct": 95.6,
+    "peak_rss_gb": 11.46,
+    "tokens_per_forward": 1.13,
+    "cache_slots_per_layer": 162.0,
+    "decode_vk_wait_ms": 4266.599486,
+    "decode_vk_frames": 18550.0,
+    "decode_vk_bytes_up": 2252800.0,
+    "decode_vk_bytes_down": 0.0,
+    "decode_tps": 20.358118332720586,
+    "generated_tokens": 256
+  },
+  "status": "ok",
+  "gpu_monitor": {
+    "stopped_by_runner": true
+  },
+  "system_memory": {
+    "min_available_kib": 2659300,
+    "pswpin_delta": 3,
+    "pswpout_delta": 0,
+    "pgmajfault_delta": 40
+  },
+  "warnings": [
+    "System swap activity occurred; counters are system-wide, not engine-only."
+  ],
+  "profile": "baseline",
+  "workload": "bench",
+  "warmup": true
+}

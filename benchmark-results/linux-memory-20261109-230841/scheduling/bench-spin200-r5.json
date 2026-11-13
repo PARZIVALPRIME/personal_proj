@@ -1,0 +1,367 @@
+{
+  "label": "bench-spin200-r5",
+  "command": [
+    "/home/parzivalprime/personal_proj/c/qwen36",
+    "0",
+    "4",
+    "/home/parzivalprime/personal_proj/benchmark-results/prompt.txt"
+  ],
+  "environment": {
+    "COLI_CUDA": "0",
+    "COLI_ENGINE": "/home/parzivalprime/personal_proj/c/qwen36",
+    "COLI_LOOKUP": "1",
+    "COLI_TIMERS": "1",
+    "COLI_VK_CHAIN_SPIN_US": "200",
+    "COLI_VK_SHADERS": "/home/parzivalprime/personal_proj/c/shaders",
+    "COLI_VK_TIER": "1",
+    "COLI_VK_TIER_EXCLUSIVE": "0",
+    "COLI_VK_TIER_HOST": "0",
+    "COLI_VK_TIER_RESERVE_GB": "0.5",
+    "COLI_VULKAN": "1",
+    "N_NEW": "256",
+    "OMP_NUM_THREADS": "6",
+    "PILOT": "0",
+    "Q36_BENCH_METRICS": "1",
+    "Q36_CONF": "none",
+    "Q36_EVICT": "slru",
+    "Q36_HEAT": "/home/parzivalprime/personal_proj/benchmark-results/linux-memory-20261109-230841/scheduling/bench-spin200-r5.heat",
+    "Q36_HEAT_WAIT": "1",
+    "Q36_IO_THREADS": "8",
+    "Q36_LOOKAHEAD": "1",
+    "Q36_MAXT": "16384",
+    "Q36_MTP": "0",
+    "Q36_RAM_FRAC": "0.80",
+    "Q36_SLRU_PROT": "0.8",
+    "Q36_VK_TIER_MIN_ROWS": "64",
+    "Q36_XPACK": "1",
+    "SNAP": "/home/parzivalprime/colibri-models/qwen36-35b"
+  },
+  "prompt_path": "/home/parzivalprime/personal_proj/benchmark-results/prompt.txt",
+  "requested_output_tokens": 256,
+  "engine_sha256": "8d742cb73f82f79de16ee09bd954ad53cd3606bd574247c245d218d45e5188f2",
+  "prompt_sha256": "8df7d5c42b8bcd2f84c0b01989e0e42c91ff835cf0b8e825d39b07c89c750755",
+  "started_utc": "2026-11-09T18:20:00.727332+00:00",
+  "starting_mem_available_kib": 14621720,
+  "decode_timing": "engine_monotonic",
+  "generated_ids_fnv64": "3e07b1f9af7dabe8",
+  "vk_profile": [],
+  "decode_cache": [
+    {
+      "layer": 0,
+      "slots": 162,
+      "hits": 1799,
+      "misses": 343,
+      "load_ms": 263.083863
+    },
+    {
+      "layer": 1,
+      "slots": 162,
+      "hits": 1814,
+      "misses": 296,
+      "load_ms": 569.976012
+    },
+    {
+      "layer": 2,
+      "slots": 162,
+      "hits": 1763,
+      "misses": 331,
+      "load_ms": 630.144057
+    },
+    {
+      "layer": 3,
+      "slots": 162,
+      "hits": 1843,
+      "misses": 240,
+      "load_ms": 440.895067
+    },
+    {
+      "layer": 4,
+      "slots": 162,
+      "hits": 1960,
+      "misses": 129,
+      "load_ms": 207.855679
+    },
+    {
+      "layer": 5,
+      "slots": 162,
+      "hits": 1963,
+      "misses": 90,
+      "load_ms": 130.179858
+    },
+    {
+      "layer": 6,
+      "slots": 162,
+      "hits": 1934,
+      "misses": 107,
+      "load_ms": 152.195541
+    },
+    {
+      "layer": 7,
+      "slots": 162,
+      "hits": 2002,
+      "misses": 42,
+      "load_ms": 70.004142
+    },
+    {
+      "layer": 8,
+      "slots": 162,
+      "hits": 1977,
+      "misses": 35,
+      "load_ms": 60.202205
+    },
+    {
+      "layer": 9,
+      "slots": 162,
+      "hits": 1993,
+      "misses": 47,
+      "load_ms": 67.261545
+    },
+    {
+      "layer": 10,
+      "slots": 162,
+      "hits": 1955,
+      "misses": 90,
+      "load_ms": 142.933845
+    },
+    {
+      "layer": 11,
+      "slots": 162,
+      "hits": 2008,
+      "misses": 73,
+      "load_ms": 103.746138
+    },
+    {
+      "layer": 12,
+      "slots": 162,
+      "hits": 1999,
+      "misses": 60,
+      "load_ms": 77.67578
+    },
+    {
+      "layer": 13,
+      "slots": 162,
+      "hits": 1970,
+      "misses": 52,
+      "load_ms": 84.509797
+    },
+    {
+      "layer": 14,
+      "slots": 162,
+      "hits": 1977,
+      "misses": 32,
+      "load_ms": 42.809084
+    },
+    {
+      "layer": 15,
+      "slots": 162,
+      "hits": 1982,
+      "misses": 33,
+      "load_ms": 54.094118
+    },
+    {
+      "layer": 16,
+      "slots": 162,
+      "hits": 2016,
+      "misses": 32,
+      "load_ms": 44.781462
+    },
+    {
+      "layer": 17,
+      "slots": 162,
+      "hits": 1996,
+      "misses": 35,
+      "load_ms": 49.014895
+    },
+    {
+      "layer": 18,
+      "slots": 162,
+      "hits": 2012,
+      "misses": 24,
+      "load_ms": 35.878052
+    },
+    {
+      "layer": 19,
+      "slots": 162,
+      "hits": 2000,
+      "misses": 33,
+      "load_ms": 46.28151
+    },
+    {
+      "layer": 20,
+      "slots": 162,
+      "hits": 2010,
+      "misses": 9,
+      "load_ms": 22.955543
+    },
+    {
+      "layer": 21,
+      "slots": 162,
+      "hits": 1989,
+      "misses": 27,
+      "load_ms": 50.498653
+    },
+    {
+      "layer": 22,
+      "slots": 162,
+      "hits": 1974,
+      "misses": 75,
+      "load_ms": 106.468898
+    },
+    {
+      "layer": 23,
+      "slots": 162,
+      "hits": 1989,
+      "misses": 92,
+      "load_ms": 136.035135
+    },
+    {
+      "layer": 24,
+      "slots": 162,
+      "hits": 1994,
+      "misses": 56,
+      "load_ms": 76.166516
+    },
+    {
+      "layer": 25,
+      "slots": 162,
+      "hits": 1984,
+      "misses": 48,
+      "load_ms": 69.483793
+    },
+    {
+      "layer": 26,
+      "slots": 162,
+      "hits": 1987,
+      "misses": 40,
+      "load_ms": 63.838577
+    },
+    {
+      "layer": 27,
+      "slots": 162,
+      "hits": 1973,
+      "misses": 40,
+      "load_ms": 57.912074
+    },
+    {
+      "layer": 28,
+      "slots": 162,
+      "hits": 1971,
+      "misses": 61,
+      "load_ms": 90.639185
+    },
+    {
+      "layer": 29,
+      "slots": 162,
+      "hits": 1985,
+      "misses": 40,
+      "load_ms": 52.754866
+    },
+    {
+      "layer": 30,
+      "slots": 162,
+      "hits": 2000,
+      "misses": 26,
+      "load_ms": 43.80551
+    },
+    {
+      "layer": 31,
+      "slots": 162,
+      "hits": 1997,
+      "misses": 27,
+      "load_ms": 43.945883
+    },
+    {
+      "layer": 32,
+      "slots": 162,
+      "hits": 2002,
+      "misses": 41,
+      "load_ms": 60.69144
+    },
+    {
+      "layer": 33,
+      "slots": 162,
+      "hits": 2019,
+      "misses": 46,
+      "load_ms": 72.166649
+    },
+    {
+      "layer": 34,
+      "slots": 162,
+      "hits": 2014,
+      "misses": 49,
+      "load_ms": 81.497542
+    },
+    {
+      "layer": 35,
+      "slots": 162,
+      "hits": 1998,
+      "misses": 37,
+      "load_ms": 62.272085
+    },
+    {
+      "layer": 36,
+      "slots": 162,
+      "hits": 1984,
+      "misses": 51,
+      "load_ms": 76.836653
+    },
+    {
+      "layer": 37,
+      "slots": 162,
+      "hits": 1996,
+      "misses": 46,
+      "load_ms": 69.852327
+    },
+    {
+      "layer": 38,
+      "slots": 162,
+      "hits": 1988,
+      "misses": 59,
+      "load_ms": 90.798462
+    },
+    {
+      "layer": 39,
+      "slots": 162,
+      "hits": 1958,
+      "misses": 120,
+      "load_ms": 194.599186
+    }
+  ],
+  "exit_code": 0,
+  "timed_out": false,
+  "wall_s": 27.11401947000013,
+  "metrics": {
+    "prompt_tokens": 32.0,
+    "vk_forwards": 227.0,
+    "vk_wait_ms": 4956.0,
+    "vk_host_experts_ms": 7982.1,
+    "ttft_s": 1.287236758,
+    "reported_speed_tps": 18.45,
+    "cache_hit_pct": 95.6,
+    "peak_rss_gb": 11.46,
+    "tokens_per_forward": 1.13,
+    "cache_slots_per_layer": 162.0,
+    "decode_vk_wait_ms": 4533.871001,
+    "decode_vk_frames": 18489.0,
+    "decode_vk_bytes_up": 2228224.0,
+    "decode_vk_bytes_down": 0.0,
+    "decode_tps": 20.26099973388083,
+    "generated_tokens": 256
+  },
+  "status": "ok",
+  "gpu_monitor": {
+    "stopped_by_runner": true
+  },
+  "system_memory": {
+    "min_available_kib": 2762876,
+    "pswpin_delta": 1,
+    "pswpout_delta": 0,
+    "pgmajfault_delta": 2
+  },
+  "warnings": [
+    "System swap activity occurred; counters are system-wide, not engine-only."
+  ],
+  "profile": "spin200",
+  "workload": "bench",
+  "warmup": false
+}
